@@ -1,0 +1,1662 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rodando o ai-memory numa VPS de US$ 5: arquitetura, benchmarks e gargalos reais</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: sticky table of contents on the left, one reading column on the right; figures and tables run a little wider than the text. */
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --ink: #15202b;
+  --muted: #5b6875;
+  --line: #dbe2e8;
+  --accent: #1f6fd1;
+  --accent-soft: #e5effb;
+  --code-bg: #edf1f5;
+  --ok: #e3f3e2;
+  --mid: #fbefd8;
+  --bad: #fbe6e6;
+  --plate: #ffffff;
+  --display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --body: "IBM Plex Sans", "Helvetica Neue", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --side: 272px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1318; --surface: #151c23; --ink: #e4ebf1; --muted: #93a0ac; --line: #26313b;
+    --accent: #6ea9f2; --accent-soft: #162a40; --code-bg: #111920;
+    --ok: #1d3322; --mid: #3a2f17; --bad: #3d1f22; --plate: #ffffff;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1318; --surface: #151c23; --ink: #e4ebf1; --muted: #93a0ac; --line: #26313b;
+  --accent: #6ea9f2; --accent-soft: #162a40; --code-bg: #111920;
+  --ok: #1d3322; --mid: #3a2f17; --bad: #3d1f22; --plate: #ffffff;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  background: var(--bg); color: var(--ink);
+  font: 400 16.5px/1.65 var(--body);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+.shell {
+  display: grid; grid-template-columns: var(--side) minmax(0, 1fr); gap: 56px;
+  max-width: 1240px; margin: 0 auto;
+  padding-left: max(24px, env(safe-area-inset-left, 0px));
+  padding-right: max(24px, env(safe-area-inset-right, 0px));
+  padding-block: 0 96px;
+}
+
+/* sidebar */
+.side { position: sticky; top: env(safe-area-inset-top, 0px); align-self: start; height: 100vh; padding-block: 40px 24px; display: flex; flex-direction: column; gap: 18px; }
+.side .brand { font: 600 12px/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.side .progress { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.side .progress i { display: block; height: 100%; width: 0; background: var(--accent); }
+.side nav { overflow-y: auto; min-height: 0; padding-right: 8px; margin-right: -8px; scrollbar-width: thin; }
+.toc, .toc ol { list-style: none; margin: 0; padding: 0; }
+.toc > li { margin: 0; }
+.toc a { display: block; padding: 5px 10px; border-left: 2px solid transparent; color: var(--muted); text-decoration: none; font-size: 14px; line-height: 1.35; text-wrap: pretty; }
+.toc > li > a { color: var(--ink); font-weight: 500; }
+.toc .sub a { padding-left: 22px; font-size: 13px; }
+.toc a:hover { color: var(--accent); }
+.toc a.on { border-left-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+/* mobile toc */
+.mtoc { display: none; }
+
+/* article */
+main { min-width: 0; padding-top: 40px; }
+.head { max-width: 46rem; padding-bottom: 28px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+.eyebrow { font: 500 12.5px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+h1 { font: 700 clamp(2rem, 4.2vw, 3.05rem)/1.06 var(--display); letter-spacing: -0.02em; margin: 14px 0 16px; text-wrap: balance; }
+.byline { color: var(--muted); font-size: 14.5px; margin: 0 0 22px; }
+.spec { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.spec li { font: 500 12.5px/1 var(--mono); padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font-variant-numeric: tabular-nums; }
+.spec li b { color: var(--muted); font-weight: 500; margin-right: 6px; }
+
+.prose { max-width: 46rem; }
+.prose > * { margin-block: 0 1em; }
+.prose h2 { font: 700 1.7rem/1.15 var(--display); letter-spacing: -0.015em; margin: 3.2rem 0 1rem; text-wrap: balance; }
+.prose h3 { font: 600 1.18rem/1.3 var(--display); margin: 2.2rem 0 .7rem; text-wrap: balance; }
+.prose h2 + h3 { margin-top: 1.2rem; }
+.prose p, .prose li { text-wrap: pretty; }
+.prose ul, .prose ol { padding-left: 1.3em; }
+.prose li { margin-bottom: .45em; }
+.prose li::marker { color: var(--muted); }
+code { font: 500 .86em/1.4 var(--mono); background: var(--code-bg); padding: .12em .36em; border-radius: 4px; overflow-wrap: anywhere; }
+pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.55; margin-block: 0 1.2em; }
+pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; white-space: pre; }
+details.code { margin-block: 0 1.4em; }
+details.code summary { cursor: pointer; font: 500 13.5px/1.4 var(--mono); color: var(--accent); padding: 8px 0; }
+details.code[open] summary { margin-bottom: 8px; }
+
+/* resumo */
+.abstract { margin: 0 0 1.2rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.ab-row { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); gap: 16px; padding: 14px 18px; border-top: 1px solid var(--line); }
+.ab-row:first-child { border-top: 0; }
+.ab-row dt { font: 600 12.5px/1.6 var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--accent); padding-top: 2px; }
+.ab-row dd { margin: 0; }
+
+/* callouts */
+.callout { margin: 0 0 1.3em; padding: 14px 18px; background: var(--accent-soft); border-radius: 8px; border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent); }
+.callout p { margin: 0; }
+.callout strong { color: var(--accent); }
+
+/* figures */
+.fig { margin: 2rem 0 2.2rem; max-width: 52rem; }
+.fig .plate { background: var(--plate); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.fig img { display: block; width: 100%; height: auto; }
+.fig figcaption { font-size: 13.5px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+.fig figcaption b { color: var(--ink); font-weight: 600; }
+.fig figcaption .src { display: block; font: 400 12px/1.5 var(--mono); margin-top: 2px; }
+
+/* tables */
+.tbl { margin: 1.6rem 0 1.8rem; max-width: 52rem; }
+.tcap { font-size: 13.5px; color: var(--muted); margin-bottom: 8px; }
+.tcap b { color: var(--ink); font-weight: 600; }
+.tscroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); margin-block: 0 1.2em; }
+.tbl .tscroll { margin: 0; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.45; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-top: 1px solid var(--line); }
+thead th { border-top: 0; font: 600 12px/1.4 var(--mono); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); background: var(--bg); white-space: nowrap; }
+td code { font-size: .84em; }
+/* backup matrix: fits the column without horizontal scroll */
+#tabela-8 table { table-layout: fixed; }
+#tabela-8 thead th { white-space: normal; vertical-align: bottom; }
+#tabela-8 thead th .q { display: block; font-weight: 400; text-transform: none; letter-spacing: 0; }
+#tabela-8 th:first-child { width: 30%; }
+#tabela-8 td:not(:first-child) { text-align: center; }
+@media (max-width: 560px) { #tabela-8 table { font-size: 12.5px; } #tabela-8 th, #tabela-8 td { padding: 8px 6px; } #tabela-8 thead th { font-size: 10.5px; } }
+td.cell-ok { background: var(--ok); }
+td.cell-mid { background: var(--mid); }
+td.cell-bad { background: var(--bad); }
+
+@media (max-width: 1100px) {
+  :root { --side: 220px; }
+  .shell { gap: 32px; }
+}
+@media (max-width: 720px) {
+  .shell { grid-template-columns: minmax(0, 1fr); gap: 0;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .side { display: none; }
+  main { padding-top: 28px; }
+  .mtoc { display: block; margin: 20px 0 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+  .mtoc summary { cursor: pointer; padding: 12px 14px; font: 600 13px/1 var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+  .mtoc .toc { padding: 0 6px 10px; }
+  .ab-row { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+}
+</style>
+
+<div class="shell">
+  <aside class="side" aria-label="Sumário">
+    <div class="brand">Sumário</div>
+    <div class="progress" aria-hidden="true"><i id="bar"></i></div>
+    <nav id="toc"><ol class="toc"><li><a href="#resumo" data-id="resumo">Resumo</a></li><li><a href="#1-uma-memoria-so-fechada-para-a-internet" data-id="1-uma-memoria-so-fechada-para-a-internet">1. Uma memória só, fechada para a internet</a></li><li><a href="#2-arquitetura-nenhuma-porta-de-aplicacao-aceita-conexao-da-i" data-id="2-arquitetura-nenhuma-porta-de-aplicacao-aceita-conexao-da-i">2. Arquitetura: nenhuma porta de aplicação aceita conexão da internet</a><ol class="sub"><li><a href="#o-tailscale-no-lugar-do-proxy-e-do-certificado" data-id="o-tailscale-no-lugar-do-proxy-e-do-certificado">O Tailscale no lugar do proxy e do certificado</a></li></ol></li><li><a href="#3-o-caminho-de-uma-sessao" data-id="3-o-caminho-de-uma-sessao">3. O caminho de uma sessão</a></li><li><a href="#4-o-que-precisa-mudar-para-rodar-numa-vps-publica-29-ajustes" data-id="4-o-que-precisa-mudar-para-rodar-numa-vps-publica-29-ajustes">4. O que precisa mudar para rodar numa VPS pública: 29 ajustes</a></li><li><a href="#5-como-medi" data-id="5-como-medi">5. Como medi</a></li><li><a href="#6-resultados" data-id="6-resultados">6. Resultados</a><ol class="sub"><li><a href="#6-1-latencia-150-ms-quase-tudo-distancia" data-id="6-1-latencia-150-ms-quase-tudo-distancia">6.1 Latência: 150 ms, quase tudo distância</a></li><li><a href="#6-2-embeddings-mesmo-acerto-em-1o-lugar-um-terco-do-tempo" data-id="6-2-embeddings-mesmo-acerto-em-1o-lugar-um-terco-do-tempo">6.2 Embeddings: mesmo acerto em 1º lugar, um terço do tempo</a></li><li><a href="#6-3-a-busca-espera-na-fila-do-ollama" data-id="6-3-a-busca-espera-na-fila-do-ollama">6.3 A busca espera na fila do Ollama</a></li><li><a href="#6-4-memoria-disco-e-a-vps" data-id="6-4-memoria-disco-e-a-vps">6.4 Memória, disco e a VPS</a></li></ol></li><li><a href="#7-backup-o-drive-e-a-unica-copia-completa-fora-da-ovh" data-id="7-backup-o-drive-e-a-unica-copia-completa-fora-da-ovh">7. Backup: o Drive é a única cópia completa fora da OVH</a></li><li><a href="#8-como-fica-o-uso-no-dia-a-dia" data-id="8-como-fica-o-uso-no-dia-a-dia">8. Como fica o uso no dia a dia</a></li><li><a href="#9-riscos-e-limitacoes" data-id="9-riscos-e-limitacoes">9. Riscos e limitações</a><ol class="sub"><li><a href="#o-login-do-chatgpt-tres-riscos-diferentes" data-id="o-login-do-chatgpt-tres-riscos-diferentes">O login do ChatGPT: três riscos diferentes</a></li><li><a href="#quem-na-tailnet-alcanca-a-vps" data-id="quem-na-tailnet-alcanca-a-vps">Quem na tailnet alcança a VPS</a></li></ol></li><li><a href="#10-o-que-levar-daqui" data-id="10-o-que-levar-daqui">10. O que levar daqui</a></li><li><a href="#referencias" data-id="referencias">Referências</a></li><li><a href="#apendice-a-configuracao-completa" data-id="apendice-a-configuracao-completa">Apêndice A. Configuração completa</a></li><li><a href="#apendice-b-dados-brutos" data-id="apendice-b-dados-brutos">Apêndice B. Dados brutos</a></li><li><a href="#apendice-c-scripts-e-perguntas-do-benchmark" data-id="apendice-c-scripts-e-perguntas-do-benchmark">Apêndice C. Scripts e perguntas do benchmark</a></li></ol></nav>
+  </aside>
+
+  <main>
+    <header class="head">
+      <div class="eyebrow">Relato técnico · 28/10/2026</div>
+      <h1>Rodando o ai-memory numa VPS de US$ 5: arquitetura, benchmarks e gargalos reais</h1>
+      <p class="byline">Thiago Rodrigues · arquiteto de cloud</p>
+      <ul class="spec">
+        <li><b>VPS</b>OVHcloud VPS-1</li>
+        <li><b>CPU</b>2 vCPU</li>
+        <li><b>RAM</b>4 GB</li>
+        <li><b>Disco</b>40 GB NVMe</li>
+        <li><b>Custo</b>US$ 5,35/mês</li>
+        <li><b>SO</b>Debian 13</li>
+        <li><b>ai-memory</b>3.2.9</li>
+      </ul>
+      <details class="mtoc" open><summary>Sumário</summary><ol class="toc"><li><a href="#resumo" data-id="resumo">Resumo</a></li><li><a href="#1-uma-memoria-so-fechada-para-a-internet" data-id="1-uma-memoria-so-fechada-para-a-internet">1. Uma memória só, fechada para a internet</a></li><li><a href="#2-arquitetura-nenhuma-porta-de-aplicacao-aceita-conexao-da-i" data-id="2-arquitetura-nenhuma-porta-de-aplicacao-aceita-conexao-da-i">2. Arquitetura: nenhuma porta de aplicação aceita conexão da internet</a><ol class="sub"><li><a href="#o-tailscale-no-lugar-do-proxy-e-do-certificado" data-id="o-tailscale-no-lugar-do-proxy-e-do-certificado">O Tailscale no lugar do proxy e do certificado</a></li></ol></li><li><a href="#3-o-caminho-de-uma-sessao" data-id="3-o-caminho-de-uma-sessao">3. O caminho de uma sessão</a></li><li><a href="#4-o-que-precisa-mudar-para-rodar-numa-vps-publica-29-ajustes" data-id="4-o-que-precisa-mudar-para-rodar-numa-vps-publica-29-ajustes">4. O que precisa mudar para rodar numa VPS pública: 29 ajustes</a></li><li><a href="#5-como-medi" data-id="5-como-medi">5. Como medi</a></li><li><a href="#6-resultados" data-id="6-resultados">6. Resultados</a><ol class="sub"><li><a href="#6-1-latencia-150-ms-quase-tudo-distancia" data-id="6-1-latencia-150-ms-quase-tudo-distancia">6.1 Latência: 150 ms, quase tudo distância</a></li><li><a href="#6-2-embeddings-mesmo-acerto-em-1o-lugar-um-terco-do-tempo" data-id="6-2-embeddings-mesmo-acerto-em-1o-lugar-um-terco-do-tempo">6.2 Embeddings: mesmo acerto em 1º lugar, um terço do tempo</a></li><li><a href="#6-3-a-busca-espera-na-fila-do-ollama" data-id="6-3-a-busca-espera-na-fila-do-ollama">6.3 A busca espera na fila do Ollama</a></li><li><a href="#6-4-memoria-disco-e-a-vps" data-id="6-4-memoria-disco-e-a-vps">6.4 Memória, disco e a VPS</a></li></ol></li><li><a href="#7-backup-o-drive-e-a-unica-copia-completa-fora-da-ovh" data-id="7-backup-o-drive-e-a-unica-copia-completa-fora-da-ovh">7. Backup: o Drive é a única cópia completa fora da OVH</a></li><li><a href="#8-como-fica-o-uso-no-dia-a-dia" data-id="8-como-fica-o-uso-no-dia-a-dia">8. Como fica o uso no dia a dia</a></li><li><a href="#9-riscos-e-limitacoes" data-id="9-riscos-e-limitacoes">9. Riscos e limitações</a><ol class="sub"><li><a href="#o-login-do-chatgpt-tres-riscos-diferentes" data-id="o-login-do-chatgpt-tres-riscos-diferentes">O login do ChatGPT: três riscos diferentes</a></li><li><a href="#quem-na-tailnet-alcanca-a-vps" data-id="quem-na-tailnet-alcanca-a-vps">Quem na tailnet alcança a VPS</a></li></ol></li><li><a href="#10-o-que-levar-daqui" data-id="10-o-que-levar-daqui">10. O que levar daqui</a></li><li><a href="#referencias" data-id="referencias">Referências</a></li><li><a href="#apendice-a-configuracao-completa" data-id="apendice-a-configuracao-completa">Apêndice A. Configuração completa</a></li><li><a href="#apendice-b-dados-brutos" data-id="apendice-b-dados-brutos">Apêndice B. Dados brutos</a></li><li><a href="#apendice-c-scripts-e-perguntas-do-benchmark" data-id="apendice-c-scripts-e-perguntas-do-benchmark">Apêndice C. Scripts e perguntas do benchmark</a></li></ol></details>
+    </header>
+    <article class="prose">
+<h2 id="resumo">Resumo</h2><dl class="abstract"><div class="ab-row"><dt>Objetivo</dt><dd>Rodar o servidor de memória dos agentes de código numa VPS barata, sem porta de aplicação ou de administração aberta para a internet, e medir se ele aguenta o uso diário.</dd></div><div class="ab-row"><dt>Método</dt><dd>Instalei o ai-memory 3.2.9 em Docker numa VPS-1 da OVHcloud (2 vCPU, 4 GB de RAM, US$ 5,35 ao mês), acessível só pela tailnet do Tailscale. Medi latência, CPU, memória, disco, qualidade de busca e backup em 28/10/2026, com o servidor em uso normal.</dd></div><div class="ab-row"><dt>Resultados</dt><dd>Uma chamada MCP pela tailnet leva 150 ms e uma busca leva 104 ms. Gerar o vetor de uma página de 1.080 palavras leva 6,8 s. A CPU fica em 5,6% em repouso, a RAM em 1,3 GB e o backup completo termina em 39 s. Nas 16 perguntas do teste, o <code>embeddinggemma</code> pôs o trecho certo em 1º lugar 14 vezes, o mesmo que o <code>bge-m3</code>, e gera os vetores 3,4x mais rápido.</dd></div><div class="ab-row"><dt>Conclusão</dt><dd>A VPS dá conta do meu uso diário depois de 29 ajustes. A configuração padrão do projeto foi pensada para rede local, e mais da metade dos ajustes existe para o servidor não ficar exposto ou para ele funcionar. A espera que aparece no dia a dia é a da busca atrás dos embeddings, que o Ollama gera um por vez e, em CPU, devagar.</dd></div></dl>
+<h2 id="1-uma-memoria-so-fechada-para-a-internet">1. Uma memória só, fechada para a internet</h2>
+<p>Sou arquiteto de cloud, não desenvolvedor em tempo integral, e uso o Claude em vários computadores. Sem uma memória compartilhada, cada máquina tinha o seu Claude, e nenhum deles sabia o que eu tinha decidido com os outros. A cada troca de computador eu explicava a mesma arquitetura de novo, como numa reunião com um colega que nunca leu a ata da anterior.</p>
+<p>Esse perfil define o tamanho do problema. O volume é o de quem usa o Claude no trabalho de arquitetura, não o de quem deixa agentes rodando em paralelo a madrugada inteira, e é para esse uso que os números deste texto valem. A VPS de US$ 5,35 atende, e a fila do Ollama, o gargalo medido na seção 6.3, deve pesar menos aqui do que pesaria num time de desenvolvimento gravando páginas o tempo todo.</p>
+<p>O <a href="https://github.com/akitaonrails/ai-memory">ai-memory</a>, projeto open source do Fabio Akita <a class="ref" href="#ref-1">[1]</a>, centraliza essa memória num servidor: hooks capturam as sessões do Claude Code, Codex ou Cursor, e o agente consulta o histórico pelo protocolo MCP. As páginas consolidadas ficam numa wiki em markdown versionada em git. O SQLite guarda os índices de busca textual e vetorial e também dados que a wiki não reconstrói, como sessões, observações e handoffs.</p>
+<p>Esse servidor guarda prompts, trechos de código e decisões de projeto, então não pode atender a internet. Parti de quatro requisitos:</p>
+<ul>
+<li>custo de uma VPS pequena, sem GPU;</li>
+<li>nenhuma porta de aplicação ou de administração respondendo fora de uma rede privada;</li>
+<li>consolidação das sessões sem pagar API por token;</li>
+<li>uma cópia completa dos dados fora do provedor da VPS.</li>
+</ul>
+<h2 id="2-arquitetura-nenhuma-porta-de-aplicacao-aceita-conexao-da-i">2. Arquitetura: nenhuma porta de aplicação aceita conexão da internet</h2>
+<figure class="fig" id="figura-1"><div class="plate"><img src="fig/fig1.png" alt="Arquitetura e camadas de defesa" loading="lazy"></div><figcaption><b>Figura 1.</b> Arquitetura e camadas de defesa<span class="src">entrada só pela tailnet, saídas iniciadas pela VPS</span></figcaption></figure>
+<p>A entrada é só pela tailnet, a rede WireGuard do Tailscale. Para fora, a VPS só inicia conexões: com o ChatGPT, que resume as sessões, e com os destinos de backup (Figura 1). Um acesso vindo da internet para na primeira camada. Um dispositivo da tailnet sem o token para na quarta.</p>
+<div class="tbl" id="tabela-1"><div class="tcap"><b>Tabela 1.</b> Camadas de defesa e a configuração de cada uma</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Camada</th>
+<th>O que barra</th>
+<th>Configuração</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1. Firewall UFW</td>
+<td>conexão de entrada que não venha da tailnet</td>
+<td>entrada negada; liberados só <code>tailscale0</code> e 41641/udp</td>
+</tr>
+<tr>
+<td>2. sshd</td>
+<td>senha, root e SSH pelo IP público</td>
+<td>só chave; porta 22 alcançável só pela tailnet</td>
+</tr>
+<tr>
+<td>3. <code>tailscale serve</code></td>
+<td>texto puro e publicação na internet</td>
+<td>TLS com certificado <code>*.ts.net</code>; Funnel desligado</td>
+</tr>
+<tr>
+<td>4. ai-memory</td>
+<td>requisição sem token ou com outro host</td>
+<td>porta em <code>127.0.0.1</code>, bearer token de 64 caracteres, <code>AI_MEMORY_ALLOWED_HOSTS</code></td>
+</tr>
+<tr>
+<td>5. Ollama</td>
+<td>acesso direto ao modelo de embeddings</td>
+<td>sem porta publicada; só a rede do compose chega nele</td>
+</tr>
+<tr>
+<td>6. Diretório de dados</td>
+<td>leitura por outros usuários do sistema</td>
+<td>dono uid 1000; token, OAuth e <code>.env.production</code> com permissão 600</td>
+</tr>
+</tbody>
+</table></div></div>
+<div class="tbl" id="tabela-2"><div class="tcap"><b>Tabela 2.</b> Conexões que a VPS inicia</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Destino</th>
+<th>Para quê</th>
+<th>Credencial na VPS</th>
+<th>Alcance da credencial</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Backend do ChatGPT (HTTPS)</td>
+<td>consolidar sessões</td>
+<td>refresh token OAuth</td>
+<td>a assinatura Plus de uma conta</td>
+</tr>
+<tr>
+<td>GitHub (SSH)</td>
+<td>espelho git da wiki</td>
+<td>deploy key ed25519</td>
+<td>escrita em um repositório privado</td>
+</tr>
+<tr>
+<td>Google Drive (HTTPS)</td>
+<td>cópia dos tarballs</td>
+<td>token do rclone</td>
+<td>escopo <code>drive.file</code>: só o que o rclone criou</td>
+</tr>
+<tr>
+<td>Coordenação do Tailscale</td>
+<td>manter a tailnet</td>
+<td>chave do nó</td>
+<td>este nó</td>
+</tr>
+<tr>
+<td>Debian e Docker Hub (HTTPS)</td>
+<td>patches e imagens</td>
+<td>nenhuma</td>
+<td>conteúdo público</td>
+</tr>
+</tbody>
+</table></div></div>
+<h3 id="o-tailscale-no-lugar-do-proxy-e-do-certificado">O Tailscale no lugar do proxy e do certificado</h3>
+<p>Coloquei a VPS na tailnet com o hostname <code>ai-memory</code>, e o servidor responde em <code>https://ai-memory.&lt;tailnet&gt;.ts.net</code>. Os clientes fecham conexão direta pelo IP público na porta 41641/udp, sem relay DERP. Essa é a única entrada aberta para a internet, e não leva a nenhuma aplicação: o WireGuard descarta, sem resposta, todo pacote que não venha de um nó autenticado.</p>
+<p>O HTTPS sai de um comando <a class="ref" href="#ref-2">[2]</a>:</p>
+<pre><code>tailscale serve --bg --https=443 http://127.0.0.1:49374
+</code></pre>
+<p>O Tailscale emite o certificado <code>*.ts.net</code>, termina o TLS e repassa para o ai-memory em loopback. Deixei Caddy, nginx e Let's Encrypt de fora. Deixei o Tailscale SSH desligado, porque o modo <code>check</code> pede reautenticação no navegador e trava sessões automatizadas. O Funnel também, porque publicaria o servidor na internet.</p>
+<aside class="callout"><p><strong>Armadilha.</strong> As portas que o Docker publica entram no iptables antes das regras do UFW <a class="ref" href="#ref-3">[3]</a>. Uma porta publicada em <code>0.0.0.0</code> fica aberta na internet com o UFW negando tudo, e o <code>ufw status</code> não mostra isso. Por isso publiquei o ai-memory só em <code>127.0.0.1:49374</code>, e o Ollama não publica porta nenhuma.</p>
+</aside>
+<p>Se o Tailscale cair na VPS, o acesso de emergência é o console KVM do painel da OVH.</p>
+<h2 id="3-o-caminho-de-uma-sessao">3. O caminho de uma sessão</h2>
+<figure class="fig" id="figura-2"><div class="plate"><img src="fig/fig2.png" alt="Ciclo de uma sessão do Claude Code" loading="lazy"></div><figcaption><b>Figura 2.</b> Ciclo de uma sessão do Claude Code<span class="src">tempos medidos em 28/10/2026</span></figcaption></figure>
+<p>No início da sessão, o Claude pede contexto pela ponte MCP, e o ai-memory busca no SQLite com o vetor da consulta que o Ollama gera. Durante a sessão, os hooks gravam cada prompt e tool call num spool local e entregam em lote no fim de cada resposta. Se o servidor estiver fora do ar, a captura espera no spool e <code>ai-memory recover</code> reenvia depois.</p>
+<p>No fim, o ai-memory manda o texto da sessão ao ChatGPT, recebe o resumo em páginas, grava na wiki e pede ao Ollama o vetor de cada página (Figura 2). O texto da sessão sai da VPS nesse momento e nos backups. Busca, captura e vetores ficam nela.</p>
+<h2 id="4-o-que-precisa-mudar-para-rodar-numa-vps-publica-29-ajustes">4. O que precisa mudar para rodar numa VPS pública: 29 ajustes</h2>
+<figure class="fig" id="figura-3"><div class="plate"><img src="fig/fig3.png" alt="Os 29 ajustes para rodar numa VPS pública, agrupados pelo efeito de não fazê-los" loading="lazy"></div><figcaption><b>Figura 3.</b> Os 29 ajustes para rodar numa VPS pública, agrupados pelo efeito de não fazê-los</figcaption></figure>
+<p>O exemplo de produção do ai-memory publica a porta em <code>0.0.0.0</code> para a rede local alcançar o servidor, e o comentário no arquivo diz que, atrás do firewall de casa, isso basta. Numa VPS com IP público, os mesmos valores deixam o servidor exposto, sem consolidar sessões na minha conta Plus e com busca fraca em português. Agrupei os ajustes pelo que acontece sem eles (Figura 3). Cinco pesam mais:</p>
+<ul>
+<li><strong>Porta em loopback.</strong> O <code>docker-compose.prod.yml.example</code> publica em <code>0.0.0.0:49374</code>. Numa VPS com IP público, isso abre a porta para a internet, mesmo com o UFW negando a entrada.</li>
+<li><strong><code>AI_MEMORY_ALLOWED_HOSTS</code>.</strong> O padrão aceita só <code>localhost</code>, <code>127.0.0.1</code> e <code>::1</code>. Sem o nome <code>ai-memory.&lt;tailnet&gt;.ts.net</code> na lista, o servidor recusa tudo que chega pelo <code>serve</code>.</li>
+<li><strong>Modelo do LLM fixado.</strong> A documentação do projeto recomenda manter o padrão do provider <code>openai-oauth</code>, o <code>gpt-5.5</code>. Na minha conta Plus, em 28/10/2026, o <code>ai-memory llm-test --provider openai-oauth</code> recebeu <code>400 model_not_found</code> com a mensagem "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account". O <code>gpt-5.6</code> e o <code>gpt-5.5-codex</code> tiveram a mesma resposta, e o <code>gpt-5.6-luna</code> respondeu. Outra conta pode aceitar outro conjunto de modelos.</li>
+<li><strong>Embedder multilíngue.</strong> O embutido, <code>all-MiniLM-L6-v2</code>, foi treinado só em inglês. O <code>embeddinggemma</code> roda num Ollama ao lado, com os prefixos de tarefa do model card <a class="ref" href="#ref-4">[4]</a>.</li>
+<li><strong>Ollama só para CPU.</strong> A imagem oficial tem 8,43 GB, dos quais 4,3 GB são CUDA, MLX e Vulkan. Uma imagem gerada na própria VPS a partir da oficial tem 226 MB.</li>
+</ul>
+<p>O Apêndice A traz o valor padrão, o valor em uso e o efeito de cada um dos 29 ajustes, além do <code>docker-compose.yml</code>, do <code>.env.production</code> sem os segredos e do Dockerfile do Ollama.</p>
+<h2 id="5-como-medi">5. Como medi</h2>
+<div class="tbl" id="tabela-3"><div class="tcap"><b>Tabela 3.</b> Servidor usado nos testes</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Recurso</th>
+<th>Valor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Plano</td>
+<td>VPS-1 da OVHcloud em Beauharnois (Canadá), US$ 5,35 ao mês <a class="ref" href="#ref-6">[6]</a></td>
+</tr>
+<tr>
+<td>CPU</td>
+<td>2 vCPU Intel Haswell em KVM, com AVX2</td>
+</tr>
+<tr>
+<td>Memória</td>
+<td>4 GB (3,7 GB utilizáveis) e swap de 2 GB</td>
+</tr>
+<tr>
+<td>Disco</td>
+<td>40 GB NVMe local</td>
+</tr>
+<tr>
+<td>Rede</td>
+<td>500 Mbps, sem cobrança por tráfego na região</td>
+</tr>
+<tr>
+<td>Sistema</td>
+<td>Debian 13 (trixie), kernel 6.12 cloud, Docker, Ollama 0.40.10</td>
+</tr>
+</tbody>
+</table></div></div>
+<p>Fiz as medições em 28/10/2026, com o servidor em uso normal. Um coletor gravou CPU, memória e o consumo de cada container a cada 2 segundos durante todas as etapas. Medi a latência com <code>curl</code> numa estação cliente no Brasil, 30 chamadas por caminho. Já as operações do ai-memory eu medi no loopback da VPS, 6 chamadas MCP por operação, com o Ollama livre e com o Ollama gerando embeddings de páginas longas sem parar.</p>
+<p>Para a qualidade da busca, usei 16 perguntas parafraseadas, duas em inglês, sobre 25 trechos das páginas reais da wiki e do README. Cada modelo indexou os 25 trechos, e o teste contou quantas vezes o trecho certo apareceu em 1º lugar e entre os 3 primeiros. As saídas brutas estão no Apêndice B, e os scripts e as perguntas, no Apêndice C.</p>
+<h2 id="6-resultados">6. Resultados</h2>
+<h3 id="6-1-latencia-150-ms-quase-tudo-distancia">6.1 Latência: 150 ms, quase tudo distância</h3>
+<figure class="fig" id="figura-4"><div class="plate"><img src="fig/fig4.png" alt="Latência do MCP" loading="lazy"></div><figcaption><b>Figura 4.</b> Latência do MCP<span class="src">curl numa estação cliente, 30 chamadas por caminho, 28/10/2026</span></figcaption></figure>
+<p>O ping até Beauharnois é de 143,5 ms, e o ai-memory responde em 1 ms (Figura 4). Uma conexão nova custa 623 ms porque soma o TCP (161 ms), o TLS (concluído aos 327 ms) e a resposta (primeiro byte aos 475 ms). A ponte MCP mantém a conexão aberta, então o custo do dia a dia é o de 150 ms. Os hooks ficam fora dessa conta, porque entregam em segundo plano.</p>
+<h3 id="6-2-embeddings-mesmo-acerto-em-1o-lugar-um-terco-do-tempo">6.2 Embeddings: mesmo acerto em 1º lugar, um terço do tempo</h3>
+<figure class="fig" id="figura-5"><div class="plate"><img src="fig/fig5.png" alt="Tempo de embedding por tamanho de texto" loading="lazy"></div><figcaption><b>Figura 5.</b> Tempo de embedding por tamanho de texto<span class="src">medido na VPS, 10 chamadas por tamanho (5 na página), Ollama 0.40.10 em CPU</span></figcaption></figure>
+<figure class="fig" id="figura-6"><div class="plate"><img src="fig/fig6.png" alt="Qualidade da busca" loading="lazy"></div><figcaption><b>Figura 6.</b> Qualidade da busca<span class="src">16 perguntas sobre 25 trechos da wiki, model_bench.out</span></figcaption></figure>
+<p>O <code>embeddinggemma</code> gera o vetor de uma página 3,4x mais rápido que o <code>bge-m3</code> (Figura 5) e pôs o trecho certo em 1º lugar nas mesmas 14 de 16 perguntas (Figura 6). Entre os 3 primeiros, o <code>bge-m3</code> acertou 16 e o <code>embeddinggemma</code> 15, e o MRR ficou em 0,938 contra 0,905. Com 16 perguntas, cada acerto vale 6,25 pontos percentuais: o teste mostra que o modelo menor serve nesta VPS, mas não prova que os dois têm a mesma qualidade. Ele também mede só o embedding. A busca do ai-memory combina o vetor com busca textual, entidades e links entre páginas, e esse conjunto eu não medi. Com acerto parecido, o que decide é o custo de CPU e memória:</p>
+<div class="tbl" id="tabela-4"><div class="tcap"><b>Tabela 4.</b> Tamanho dos modelos comparados</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Modelo</th>
+<th>Parâmetros</th>
+<th>Dimensões</th>
+<th>Memória residente</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>embeddinggemma</code> (em uso)</td>
+<td>308M</td>
+<td>768</td>
+<td>681 MiB</td>
+</tr>
+<tr>
+<td><code>bge-m3</code></td>
+<td>568M</td>
+<td>1.024</td>
+<td>1.250 MiB</td>
+</tr>
+<tr>
+<td><code>qwen3-embedding:0.6b</code></td>
+<td>595M</td>
+<td>1.024</td>
+<td>1.122 MiB</td>
+</tr>
+</tbody>
+</table></div></div>
+<p>Os prefixos de tarefa valem duas respostas certas a mais para o <code>embeddinggemma</code>. No Qwen3, a instrução de consulta piorou o resultado.</p>
+<h3 id="6-3-a-busca-espera-na-fila-do-ollama">6.3 A busca espera na fila do Ollama</h3>
+<figure class="fig" id="figura-7"><div class="plate"><img src="fig/fig7.png" alt="Fila do Ollama" loading="lazy"></div><figcaption><b>Figura 7.</b> Fila do Ollama<span class="src">busca enviada 1 s depois de uma página longa, model_bench.out</span></figcaption></figure>
+<p>A espera tem duas causas que se somam. O Ollama processa embeddings com um único slot, e em CPU uma página longa ocupa esse slot por segundos. A variável <code>OLLAMA_NUM_PARALLEL</code> não vale para esse tipo de modelo, e o log do runner mostra <code>n_slots = 1</code> com qualquer valor. Uma busca que chega enquanto uma página está sendo processada espera essa página terminar (Figura 7).</p>
+<div class="tbl" id="tabela-5"><div class="tcap"><b>Tabela 5.</b> Operações do ai-memory com o Ollama livre e ocupado (mediana de 6 chamadas)</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Operação</th>
+<th><code>bge-m3</code> livre</th>
+<th><code>bge-m3</code> ocupado</th>
+<th><code>embeddinggemma</code> livre</th>
+<th><code>embeddinggemma</code> ocupado</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>memory_query</code></td>
+<td>159 ms</td>
+<td>23,9 s</td>
+<td>104 ms</td>
+<td>6,5 s</td>
+</tr>
+<tr>
+<td><code>memory_recent</code></td>
+<td>2,3 ms</td>
+<td>3,4 ms</td>
+<td>3,0 ms</td>
+<td>4,6 ms</td>
+</tr>
+<tr>
+<td><code>memory_read_page</code></td>
+<td>2,7 ms</td>
+<td>2,8 ms</td>
+<td>2,9 ms</td>
+<td>4,8 ms</td>
+</tr>
+</tbody>
+</table></div></div>
+<p>Só a busca sente a fila, porque é a única operação da tabela que precisa de um vetor. Listar e ler páginas continua na casa dos milissegundos com a CPU em 100%. O caso típico de espera é fechar uma sessão e abrir outra logo em seguida: a página da sessão anterior ainda está no Ollama quando a nova pede contexto.</p>
+<aside class="callout"><p><strong>Agendar os embeddings não resolve.</strong> O ai-memory gera o vetor logo depois de gravar a página, e a busca precisa do modelo na hora. O que reduz a espera é um modelo mais rápido.</p>
+</aside>
+<figure class="fig" id="figura-8"><div class="plate"><img src="fig/fig8.png" alt="CPU por etapa dos testes" loading="lazy"></div><figcaption><b>Figura 8.</b> CPU por etapa dos testes<span class="src">/proc/stat e docker stats a cada 2 s, medido com o bge-m3</span></figcaption></figure>
+<p>A CPU só satura enquanto o Ollama calcula embeddings; em repouso, o sistema usa 5,6% (Figura 8). O teste do LLM chega a 17%, quase tudo do <code>docker exec</code> que dispara o teste, porque o modelo roda nos servidores da OpenAI. Fiz a medição por etapa com o <code>bge-m3</code>. Com o <code>embeddinggemma</code>, os picos têm a mesma forma e duram cerca de um terço.</p>
+<p>Durante um embedding longo, o initialize do MCP no loopback ficou em 1,4 ms no p50 e 5,5 ms no p95, contra 1,2 ms e 1,4 ms em repouso. Limitar o Ollama a 1 vCPU só deixaria o embedding mais lento: com o <code>bge-m3</code>, um texto de 216 palavras passa de 3,3 s para 6,3 s.</p>
+<h3 id="6-4-memoria-disco-e-a-vps">6.4 Memória, disco e a VPS</h3>
+<p>A memória ficou estável em todas as etapas, sem uso de swap. Com o <code>embeddinggemma</code> carregado, a VPS usa 1,3 GB dos 3,7 GB, e o cache de páginas do kernel ocupa outros 1,3 GB, liberados sob demanda.</p>
+<div class="tbl" id="tabela-6"><div class="tcap"><b>Tabela 6.</b> Memória residente por processo</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Processo</th>
+<th>Memória</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>llama-server</code> (<code>embeddinggemma</code>, dentro do Ollama)</td>
+<td>722 MiB</td>
+</tr>
+<tr>
+<td><code>dockerd</code></td>
+<td>130 MiB</td>
+</tr>
+<tr>
+<td><code>containerd</code></td>
+<td>66 MiB</td>
+</tr>
+<tr>
+<td><code>tailscaled</code></td>
+<td>54 MiB</td>
+</tr>
+<tr>
+<td><code>ai-memory</code></td>
+<td>45 MiB</td>
+</tr>
+<tr>
+<td><code>ollama</code> (processo servidor)</td>
+<td>40 MiB</td>
+</tr>
+</tbody>
+</table></div></div>
+<p>O disco tem 6,1 GB em uso dos 40 GB, dos quais 1,7 GB são modelos do Ollama. As duas imagens Docker somam 424 MB.</p>
+<div class="tbl" id="tabela-7"><div class="tcap"><b>Tabela 7.</b> Desempenho da VPS</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Medida</th>
+<th>Resultado</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>sysbench cpu, 1 thread</td>
+<td>310 eventos/s, p95 de 3,55 ms</td>
+</tr>
+<tr>
+<td>CPU steal com os 2 vCPUs em 100%</td>
+<td>0,02%</td>
+</tr>
+<tr>
+<td><code>bge-m3</code> com 1, 1,5 e 2 vCPU (216 palavras)</td>
+<td>6,3 s, 4,4 s e 3,3 s</td>
+</tr>
+<tr>
+<td>Memória, blocos de 1 KB, 1 thread</td>
+<td>4.087 MiB/s</td>
+</tr>
+<tr>
+<td>Memória, blocos de 1 MB, 2 threads</td>
+<td>13.248 MiB/s</td>
+</tr>
+<tr>
+<td>Disco, escrita 4 KB com fsync a cada escrita</td>
+<td>1.598 IOPS; fsync médio de 0,61 ms, p99 de 0,91 ms</td>
+</tr>
+<tr>
+<td>Disco, leitura sequencial 1 MB</td>
+<td>561 MiB/s</td>
+</tr>
+<tr>
+<td>Disco, leitura aleatória 4 KB, fila 32</td>
+<td>27.607 IOPS</td>
+</tr>
+<tr>
+<td>Download da internet (100 MB da OVH)</td>
+<td>54 MB/s (435 Mbps)</td>
+</tr>
+<tr>
+<td>Cópia por ssh na tailnet</td>
+<td>9,9 MB/s de download, 6,0 MB/s de upload</td>
+</tr>
+</tbody>
+</table></div></div>
+<p>Com steal de 0,02% sob carga total, os vCPUs não disputaram o host com outras VMs no período medido. O tempo do <code>bge-m3</code> cai quase em proporção aos vCPUs, então o segundo núcleo rende. Com fsync médio de 0,61 ms, cada commit do SQLite custa menos de 1 ms de disco. Pela tailnet, a cópia por ssh fica em 9,9 MB/s numa única conexão TCP, com RTT de 143 ms. O teste não isolou o que limita essa taxa.</p>
+<h2 id="7-backup-o-drive-e-a-unica-copia-completa-fora-da-ovh">7. Backup: o Drive é a única cópia completa fora da OVH</h2>
+<div class="tbl" id="tabela-8"><div class="tcap"><b>Tabela 8.</b> O que cada cópia restaura em quatro falhas</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Falha</th>
+<th>GitHub<span class="q">espelho git</span></th>
+<th>Tarball<span class="q">na própria VPS</span></th>
+<th>Google Drive<span class="q">tarballs, 30 dias</span></th>
+<th>Snapshot<span class="q">da OVH, diário</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Página apagada por engano</td>
+<td class="cell-ok">pelo histórico</td>
+<td class="cell-ok">completo</td>
+<td class="cell-ok">completo</td>
+<td class="cell-ok">completo</td>
+</tr>
+<tr>
+<td>Banco SQLite corrompido</td>
+<td class="cell-mid">só a wiki</td>
+<td class="cell-ok">completo</td>
+<td class="cell-ok">completo</td>
+<td class="cell-ok">completo</td>
+</tr>
+<tr>
+<td>VPS perdida</td>
+<td class="cell-mid">só a wiki</td>
+<td class="cell-bad">perdido</td>
+<td class="cell-ok">completo</td>
+<td class="cell-ok">completo</td>
+</tr>
+<tr>
+<td>Conta da OVH perdida</td>
+<td class="cell-mid">só a wiki</td>
+<td class="cell-bad">perdido</td>
+<td class="cell-ok">completo</td>
+<td class="cell-bad">perdido</td>
+</tr>
+</tbody>
+</table></div></div>
+<p>"Completo" devolve wiki, sessões, observações, handoffs e tokens com <code>ai-memory restore</code>. "Só a wiki" devolve as páginas com <code>ai-memory reindex</code>, e sessões e tokens se perdem. Só o Drive guarda uma cópia completa dos dados fora da OVH. Nenhuma das cópias, exceto o snapshot, traz a instalação em si: o <code>.env.production</code> com o token do servidor, o <code>auth.json</code> do ChatGPT, a deploy key do GitHub e o token do rclone ficam fora dos tarballs e do espelho, e numa VPS nova precisam ser refeitos. Também não testei o restore numa máquina limpa: o backup roda todo dia, mas a volta ainda não foi validada.</p>
+<p>Um timer do systemd roda o script de backup todo dia às 06:00 UTC, com até 30 minutos de variação e <code>Persistent=true</code>: se a VPS estiver desligada no horário, o backup roda quando ela voltar. Uma execução completa leva 39 s, e o tarball do dia tem 305 KB.</p>
+<div class="tbl" id="tabela-9"><div class="tcap"><b>Tabela 9.</b> Camadas de backup</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Camada</th>
+<th>Destino</th>
+<th>Conteúdo</th>
+<th>Retenção</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Espelho git</td>
+<td>repositório privado no GitHub</td>
+<td>wiki, <code>docker-compose.yml</code> e Dockerfile do Ollama</td>
+<td>histórico do git</td>
+</tr>
+<tr>
+<td>Tarball local</td>
+<td><code>/var/opt/ai-memory/tarballs</code></td>
+<td>wiki e snapshot consistente do SQLite</td>
+<td>30 dias</td>
+</tr>
+<tr>
+<td>Cópia externa</td>
+<td>pasta no Google Drive</td>
+<td>os mesmos tarballs</td>
+<td>30 dias</td>
+</tr>
+<tr>
+<td>Snapshot</td>
+<td>painel da OVH</td>
+<td>disco inteiro da VPS</td>
+<td>diário, do provedor</td>
+</tr>
+</tbody>
+</table></div></div>
+<p>Sessões, observações, handoffs e tokens existem só no SQLite. Por isso o espelho git, sozinho, só devolve a wiki (Tabela 8). O tarball sai de <code>ai-memory backup</code>, que copia o SQLite pela API de backup online; uma cópia direta do arquivo poderia pegar o WAL no meio de uma escrita.</p>
+<p>Antes do push, o <code>rsync</code> exclui do espelho <code>auth.json</code>, <code>auth-tokens/</code>, <code>db/</code> e arquivos <code>*.env</code>, <code>*.pem</code>, <code>*.key</code> e <code>*.crt</code>. Uma busca pelo token do servidor no espelho não encontra nenhuma ocorrência. O rclone usa o escopo <code>drive.file</code>, que só enxerga os arquivos que ele mesmo criou.</p>
+<p>Os tarballs vão ao Drive sem criptografia. Foi uma escolha minha, consciente, e aceitei o risco: quem tiver acesso à conta Google, ou a um link compartilhado desses arquivos, lê as sessões capturadas. O escopo <code>drive.file</code> limita o que o rclone enxerga, não quem lê a conta. O ideal é criptografar antes do envio, com um remote <code>crypt</code> do rclone, e guardar a senha fora da VPS e da conta Google, porque sem ela o backup não volta.</p>
+<h2 id="8-como-fica-o-uso-no-dia-a-dia">8. Como fica o uso no dia a dia</h2>
+<p>No uso normal não há comando a rodar. Os hooks capturam as sessões, e o Claude consulta a memória quando o pedido precisa de contexto:</p>
+<div class="tbl" id="tabela-10"><div class="tcap"><b>Tabela 10.</b> Pedidos comuns e a ferramenta MCP que atende cada um</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Pedido ao agente</th>
+<th>Ferramenta MCP</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>"já discutimos X?", "o que decidimos sobre Y?"</td>
+<td><code>memory_query</code></td>
+</tr>
+<tr>
+<td>"onde paramos?"</td>
+<td>handoff / <code>memory_explore</code></td>
+</tr>
+<tr>
+<td>"lembre que aqui usamos pnpm"</td>
+<td><code>memory_write_page</code></td>
+</tr>
+<tr>
+<td>"em todos os meus projetos: nunca dar force-push"</td>
+<td><code>memory_write_page</code> com <code>scope: "global"</code></td>
+</tr>
+<tr>
+<td>"encerra e salva o contexto"</td>
+<td><code>memory_handoff_begin</code></td>
+</tr>
+</tbody>
+</table></div></div>
+<p>Dois hábitos melhoram o resultado. <code>ai-memory install-instructions</code>, rodado uma vez por projeto, grava no <code>CLAUDE.md</code> as regras de quando consultar a memória. Abrir o agente com <code>ai-memory run claude</code> acrescenta handoff entre sessões e <code>ai-memory continue</code> para retomar trabalho. A interface web fica em <code>https://ai-memory.&lt;tailnet&gt;.ts.net/web</code>, com o token como senha.</p>
+<h2 id="9-riscos-e-limitacoes">9. Riscos e limitações</h2>
+<div class="tbl" id="tabela-11"><div class="tcap"><b>Tabela 11.</b> Riscos conhecidos</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Risco</th>
+<th>O que quebra</th>
+<th>Mitigação atual</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OpenAI bloquear o uso do backend do ChatGPT por terceiros</td>
+<td>a consolidação; captura e busca continuam</td>
+<td>trocar quatro linhas do <code>.env.production</code> para OpenRouter + Haiku</td>
+</tr>
+<tr>
+<td>Cota do ChatGPT Plus esgotar num dia pesado</td>
+<td>consolidação das sessões daquele dia</td>
+<td>nenhuma automática</td>
+</tr>
+<tr>
+<td>Tailscale cair na VPS</td>
+<td>nenhum cliente alcança o servidor; a captura espera no spool</td>
+<td>console KVM da OVH</td>
+</tr>
+<tr>
+<td>Dispositivo da tailnet comprometido</td>
+<td>acesso de rede ao servidor</td>
+<td>o token continua exigido; o nó sai pelo painel da tailnet; a política da tailnet ainda libera tudo</td>
+</tr>
+<tr>
+<td>Vazamento do Drive ou do GitHub</td>
+<td>sessões capturadas legíveis</td>
+<td>repositório privado e escopo <code>drive.file</code>; sem criptografia, risco aceito; o ideal é rclone crypt</td>
+</tr>
+<tr>
+<td>Versão nova do ai-memory com migração</td>
+<td>servidor e clientes fora de sincronia</td>
+<td>versão fixada no compose; atualização com backup antes</td>
+</tr>
+<tr>
+<td>VPS comprometida</td>
+<td>acesso às estações pela tailnet e às credenciais guardadas na VPS</td>
+<td>nenhuma na tailnet enquanto a política for a padrão; grants descritos abaixo</td>
+</tr>
+</tbody>
+</table></div></div>
+<p>O servidor só existe dentro da tailnet, então ambientes sem Tailscale, como o Claude Code na web ou runners de CI, ficam sem memória. O rclone da VPS é o pacote do Debian, versão 1.60, que funciona com o Drive hoje; se o Google mudar o fluxo de OAuth, a saída é o binário oficial. O SSH aceita só as chaves já cadastradas.</p>
+<h3 id="o-login-do-chatgpt-tres-riscos-diferentes">O login do ChatGPT: três riscos diferentes</h3>
+<p>O provider <code>openai-oauth</code> entra na conta ChatGPT pelo backend do Codex e guarda o refresh token em <code>auth.json</code>, no diretório de dados da VPS. Esse arranjo tem três riscos que quebram coisas diferentes e pedem respostas diferentes.</p>
+<div class="tbl" id="tabela-12"><div class="tcap"><b>Tabela 12.</b> Riscos do login do ChatGPT</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Risco</th>
+<th>O que acontece</th>
+<th>Situação na minha instalação</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Compatibilidade do backend</td>
+<td>a OpenAI muda o backend ou os modelos aceitos, e a consolidação falha; captura e busca continuam</td>
+<td>já aconteceu com o <code>gpt-5.5</code> (seção 4); a troca para OpenRouter + Haiku muda quatro linhas do <code>.env.production</code> (Tabela A5)</td>
+</tr>
+<tr>
+<td>Autorização de uso</td>
+<td>o uso da assinatura por um servidor remoto pode não estar coberto pelas regras da OpenAI</td>
+<td>sem resposta clara; detalhe abaixo</td>
+</tr>
+<tr>
+<td>Credencial guardada na VPS</td>
+<td>quem ler o <code>auth.json</code> usa a assinatura Plus em nome da conta até o token ser revogado</td>
+<td>arquivo com permissão 600; fora do espelho git e dos tarballs, que levam só o banco e a wiki; dentro do snapshot da OVH</td>
+</tr>
+</tbody>
+</table></div></div>
+<p>A OpenAI documenta o uso do plano do ChatGPT por apps de terceiros na integração Sign in with ChatGPT <a class="ref" href="#ref-7">[7]</a>. Pelo guia, esse uso vale para projetos open source e projetos pessoais que rodam localmente, e um app hospedado remotamente precisa pedir acesso antes de ser oferecido a usuários. O ai-memory é open source e minha instalação é de uso pessoal, mas roda numa VPS e não na minha máquina, e o login do projeto passa pelo Codex, não por essa integração. O guia não cobre esse caso. Por isso trato a consolidação pelo ChatGPT como uma dependência que pode sumir: captura, busca e backup não dependem dela.</p>
+<p>Se o <code>auth.json</code> vazar, a resposta é sair de todos os dispositivos nas configurações de segurança da conta ChatGPT, rodar <code>ai-memory auth logout openai-oauth</code> na VPS e refazer o login.</p>
+<h3 id="quem-na-tailnet-alcanca-a-vps">Quem na tailnet alcança a VPS</h3>
+<p>A política de acesso da minha tailnet ainda é a padrão de uma tailnet nova: o filtro de pacotes que o Tailscale distribui libera todo dispositivo para todo dispositivo, em qualquer porta. O token do ai-memory continua exigido na 443, mas a regra vale nos dois sentidos. Se a VPS for comprometida, ela alcança as estações da casa pela tailnet, e é a máquina com mais credenciais guardadas: refresh token do ChatGPT, deploy key do GitHub e token do rclone.</p>
+<p>Os grants do Tailscale negam tudo que não estiver liberado, e cada regra vale só de <code>src</code> para <code>dst</code> <a class="ref" href="#ref-8">[8]</a>. Com a VPS marcada com uma tag, a política abaixo deixa os dispositivos dos membros da tailnet conversarem entre si, libera só as portas 443 e 22 da VPS e não dá à VPS nenhuma regra de saída para a tailnet:</p>
+<pre><code class="language-json">{
+  &quot;tagOwners&quot;: {
+    &quot;tag:ai-memory&quot;: [&quot;autogroup:admin&quot;]
+  },
+  &quot;grants&quot;: [
+    {&quot;src&quot;: [&quot;autogroup:member&quot;], &quot;dst&quot;: [&quot;autogroup:member&quot;], &quot;ip&quot;: [&quot;*&quot;]},
+    {&quot;src&quot;: [&quot;autogroup:member&quot;], &quot;dst&quot;: [&quot;tag:ai-memory&quot;], &quot;ip&quot;: [&quot;tcp:443&quot;, &quot;tcp:22&quot;]}
+  ]
+}
+</code></pre>
+<p>Um dispositivo com tag deixa de pertencer a um usuário, então o Taildrop para de funcionar com a VPS, e o token passa a ir por <code>scp</code> na porta 22. A tag é aplicada no painel da tailnet, na máquina da VPS, e o editor do painel valida a política antes de salvar.</p>
+<h2 id="10-o-que-levar-daqui">10. O que levar daqui</h2>
+<ol>
+<li><strong>Publique as portas do Docker só em <code>127.0.0.1</code>.</strong> O UFW não protege o que o Docker publica.</li>
+<li><strong>Deixe o TLS com o <code>tailscale serve</code>.</strong> Um comando substitui proxy reverso e renovação de certificado.</li>
+<li><strong>Teste o modelo do LLM antes de confiar na consolidação.</strong> Rode <code>ai-memory llm-test</code> com a sua conta. Na minha conta Plus, o padrão <code>gpt-5.5</code> voltou 400 e o <code>gpt-5.6-luna</code> respondeu.</li>
+<li><strong>Troque o embedder se as sessões forem em português.</strong> Nas 16 perguntas, o <code>embeddinggemma</code> com prefixos acertou em 1º lugar tantas vezes quanto o <code>bge-m3</code>, com um terço do tempo e metade da memória.</li>
+<li><strong>Monte o Ollama só para CPU.</strong> A imagem oficial gasta 4,3 GB com GPU que a VPS não tem.</li>
+<li><strong>Tenha uma cópia completa fora do provedor.</strong> O espelho git devolve a wiki, mas não as sessões.</li>
+<li><strong>Criptografe essa cópia.</strong> Aceitei o risco de mandar os tarballs abertos ao Drive; um remote <code>crypt</code> do rclone fecha esse risco.</li>
+</ol>
+<p>Próximos passos: aplicar os grants da seção 9 e marcar a VPS com <code>tag:ai-memory</code>, criptografar os tarballs com um remote <code>crypt</code> do rclone, rodar <code>ai-memory install-instructions</code> nos projetos ativos, ligar as demais estações da tailnet com o prompt do README e, depois de um mês, revisar a cota do ChatGPT Plus e o tamanho do banco.</p>
+<h2 id="referencias">Referências</h2>
+<ol>
+<li id="ref-1">ai-memory, repositório oficial. <a href="https://github.com/akitaonrails/ai-memory" target="_blank" rel="noopener">https://github.com/akitaonrails/ai-memory</a></li>
+<li id="ref-2">Tailscale. Tailscale Serve. <a href="https://tailscale.com/kb/1312/serve" target="_blank" rel="noopener">https://tailscale.com/kb/1312/serve</a></li>
+<li id="ref-3">Docker. Packet filtering and firewalls. <a href="https://docs.docker.com/engine/network/packet-filtering-firewalls/" target="_blank" rel="noopener">https://docs.docker.com/engine/network/packet-filtering-firewalls/</a></li>
+<li id="ref-4">Google. EmbeddingGemma model card. <a href="https://ai.google.dev/gemma/docs/embeddinggemma/model_card" target="_blank" rel="noopener">https://ai.google.dev/gemma/docs/embeddinggemma/model_card</a></li>
+<li id="ref-5">Ollama. embeddinggemma. <a href="https://ollama.com/library/embeddinggemma" target="_blank" rel="noopener">https://ollama.com/library/embeddinggemma</a></li>
+<li id="ref-6">OVHcloud. VPS. <a href="https://www.ovhcloud.com/en/vps/" target="_blank" rel="noopener">https://www.ovhcloud.com/en/vps/</a></li>
+<li id="ref-7">OpenAI. Integrating Sign in with ChatGPT in your open-source app. <a href="https://developers.openai.com/cookbook/articles/sign-in-with-chatgpt" target="_blank" rel="noopener">https://developers.openai.com/cookbook/articles/sign-in-with-chatgpt</a></li>
+<li id="ref-8">Tailscale. Grants. <a href="https://tailscale.com/kb/1324/grants" target="_blank" rel="noopener">https://tailscale.com/kb/1324/grants</a></li>
+</ol>
+<h2 id="apendice-a-configuracao-completa">Apêndice A. Configuração completa</h2>
+<p>Os valores padrão são os da versão 3.2.9 do ai-memory, que conferi no código-fonte, e os da imagem oficial do Ollama.</p>
+<div class="tbl" id="tabela-a1"><div class="tcap"><b>Tabela A1.</b> Servidor ai-memory</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Padrão</th>
+<th>Na minha instalação</th>
+<th>Sem o ajuste</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Publicação da porta</td>
+<td><code>0.0.0.0:49374</code> no exemplo de produção, pensado para a LAN</td>
+<td><code>127.0.0.1:49374</code></td>
+<td>porta aberta na internet</td>
+</tr>
+<tr>
+<td>TLS</td>
+<td>nenhum</td>
+<td><code>tailscale serve</code> na 443</td>
+<td>bearer token em texto puro</td>
+</tr>
+<tr>
+<td><code>AI_MEMORY_ALLOWED_HOSTS</code></td>
+<td><code>localhost</code>, <code>127.0.0.1</code>, <code>::1</code></td>
+<td>inclui <code>ai-memory.&lt;tailnet&gt;.ts.net</code></td>
+<td>requisições do <code>serve</code> recusadas</td>
+</tr>
+<tr>
+<td><code>AI_MEMORY_AUTH__SECURE_COOKIE</code></td>
+<td><code>false</code></td>
+<td><code>true</code></td>
+<td>com login na interface web, o servidor recusa subir em HTTP fora do loopback</td>
+</tr>
+<tr>
+<td><code>AI_MEMORY_LLM_MODEL</code></td>
+<td><code>gpt-5.5</code></td>
+<td><code>gpt-5.6-luna</code></td>
+<td><code>400 model_not_found</code> na minha conta Plus, em 28/10/2026</td>
+</tr>
+<tr>
+<td><code>AI_MEMORY_CONSOLIDATE_ON_SESSION_END</code></td>
+<td><code>false</code></td>
+<td><code>true</code></td>
+<td>sessões só viram páginas quando alguém pede</td>
+</tr>
+<tr>
+<td>Backfill de embeddings</td>
+<td>desligado com embedder configurado</td>
+<td>a cada 3.600 s</td>
+<td>página que falhou no embedding fica fora da busca</td>
+</tr>
+<tr>
+<td>Embedder</td>
+<td><code>all-MiniLM-L6-v2</code>, só inglês</td>
+<td><code>embeddinggemma</code> pelo provider <code>openai-compat</code></td>
+<td>busca fraca em português</td>
+</tr>
+<tr>
+<td>Prefixos de tarefa</td>
+<td>nenhum</td>
+<td>os do model card do Google</td>
+<td>duas respostas certas a menos em 16</td>
+</tr>
+</tbody>
+</table></div></div>
+<div class="tbl" id="tabela-a2"><div class="tcap"><b>Tabela A2.</b> Ollama</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Padrão</th>
+<th>Na minha instalação</th>
+<th>Sem o ajuste</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Imagem</td>
+<td><code>ollama/ollama</code>, 8,43 GB</td>
+<td><code>local/ollama-cpu:0.40.10</code>, 226 MB</td>
+<td>4,3 GB em bibliotecas de GPU</td>
+</tr>
+<tr>
+<td><code>pull_policy</code></td>
+<td>baixa quando falta</td>
+<td><code>never</code></td>
+<td><code>docker compose pull</code> procura a imagem local no Docker Hub</td>
+</tr>
+<tr>
+<td>Cache de build</td>
+<td>fica no disco</td>
+<td><code>docker builder prune -af</code></td>
+<td>8,4 GB de cache no disco</td>
+</tr>
+<tr>
+<td>Memória</td>
+<td>sem limite</td>
+<td><code>mem_limit: 2g</code></td>
+<td>pico do Ollama pode levar o OOM killer ao ai-memory</td>
+</tr>
+<tr>
+<td><code>OLLAMA_KEEP_ALIVE</code></td>
+<td>5 minutos</td>
+<td>24 h</td>
+<td>cerca de 3 s de carga na primeira busca depois de uma pausa</td>
+</tr>
+<tr>
+<td>Porta</td>
+<td>publicada nos exemplos de uso</td>
+<td>nenhuma</td>
+<td>modelo acessível fora do compose</td>
+</tr>
+</tbody>
+</table></div></div>
+<div class="tbl" id="tabela-a3"><div class="tcap"><b>Tabela A3.</b> Sistema operacional</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Área</th>
+<th>Configuração</th>
+<th>Arquivo</th>
+<th>Sem o ajuste</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SSH</td>
+<td>sem senha, sem teclado interativo, sem root, só chave</td>
+<td><code>/etc/ssh/sshd_config.d/10-hardening.conf</code></td>
+<td>depende da imagem do provedor</td>
+</tr>
+<tr>
+<td>Firewall</td>
+<td>UFW negando entrada; <code>tailscale0</code> e 41641/udp liberados, IPv4 e IPv6</td>
+<td>regras do UFW</td>
+<td>serviço em <code>0.0.0.0</code> fica na internet</td>
+</tr>
+<tr>
+<td>Resolução de nomes</td>
+<td><code>LLMNR=no</code>, <code>MulticastDNS=no</code></td>
+<td>drop-in do <code>systemd-resolved</code></td>
+<td>porta 5355 aberta em <code>0.0.0.0</code></td>
+</tr>
+<tr>
+<td>Memória</td>
+<td>swapfile de 2 GB, <code>vm.swappiness = 10</code></td>
+<td><code>/etc/sysctl.d/90-ai-memory.conf</code></td>
+<td>OOM killer num pico</td>
+</tr>
+<tr>
+<td>Rede</td>
+<td>BBR com <code>fq</code></td>
+<td><code>/etc/sysctl.d/90-ai-memory.conf</code></td>
+<td>controle de congestionamento que rende menos com 143 ms de RTT</td>
+</tr>
+<tr>
+<td>Logs do Docker</td>
+<td>driver <code>local</code>, 3 arquivos de 10 MB</td>
+<td><code>/etc/docker/daemon.json</code></td>
+<td><code>json-file</code> cresce sem limite</td>
+</tr>
+<tr>
+<td>Docker</td>
+<td><code>live-restore: true</code></td>
+<td><code>/etc/docker/daemon.json</code></td>
+<td>containers param quando o <code>dockerd</code> reinicia</td>
+</tr>
+<tr>
+<td>Journal</td>
+<td><code>SystemMaxUse=200M</code></td>
+<td><code>/etc/systemd/journald.conf.d/size.conf</code></td>
+<td>até 10% do disco em logs</td>
+</tr>
+<tr>
+<td>Atualizações</td>
+<td>reboot automático às 07:30 UTC, depois do backup</td>
+<td><code>/etc/apt/apt.conf.d/52ai-memory-reboot</code></td>
+<td>kernel corrigido instalado sem uso</td>
+</tr>
+</tbody>
+</table></div></div>
+<div class="tbl" id="tabela-a4"><div class="tcap"><b>Tabela A4.</b> Clientes e backup</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Padrão</th>
+<th>Na minha instalação</th>
+<th>Sem o ajuste</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Cliente</td>
+<td><code>ai-memory setup</code> sobe um servidor local</td>
+<td>só o binário, com <code>server_url</code> apontando para a VPS</td>
+<td>uma memória separada por máquina</td>
+</tr>
+<tr>
+<td>MCP</td>
+<td>sem <code>--session-aware</code></td>
+<td><code>install-mcp --session-aware</code>, pela ponte <code>mcp-bridge</code></td>
+<td>consultas sem o id da sessão</td>
+</tr>
+<tr>
+<td><code>PATH</code></td>
+<td><code>~/.local/bin</code> fora do <code>PATH</code> em alguns shells</td>
+<td>incluído no shell que abre o Claude Code</td>
+<td>hooks não acham o binário e nada é capturado</td>
+</tr>
+<tr>
+<td>Token</td>
+<td>aceito no config do agente ou em variável de ambiente</td>
+<td>arquivo 600, levado pelo Taildrop</td>
+<td>segredo espalhado em configurações</td>
+</tr>
+<tr>
+<td>Script de backup</td>
+<td>exemplo para instalação nativa</td>
+<td>adaptado para Docker, com exclusão de segredos</td>
+<td>não acha o binário nem o banco</td>
+</tr>
+</tbody>
+</table></div></div>
+<p>No cliente, o instalador oficial confere o SHA-256 da release e cria <code>~/.local/bin/ai-memory</code>. A configuração fica no data dir do ai-memory (no macOS, <code>~/Library/Application Support/ai-memory</code>), e dois comandos ligam o Claude Code: <code>ai-memory install-mcp --client claude-code --session-aware --apply</code> e <code>ai-memory install-hooks --agent claude-code --apply</code>.</p>
+<pre><code>server_url = &quot;https://ai-memory.&lt;tailnet&gt;.ts.net&quot;
+
+[auth]
+bearer_token_file = &quot;auth-tokens/default&quot;
+</code></pre>
+<p>O <code>docker-compose.yml</code> em <code>/opt/ai-memory</code>:</p>
+<details class="code"><summary>Ver o código completo (48 linhas)</summary><pre><code class="language-yaml">name: ai-memory
+services:
+  ai-memory:
+    image: akitaonrails/ai-memory:3.2.9
+    container_name: ai-memory
+    restart: unless-stopped
+    user: &quot;1000:1000&quot;
+    ports:
+      # Loopback only: exposed to the tailnet via &quot;tailscale serve&quot; (HTTPS).
+      - &quot;127.0.0.1:49374:49374&quot;
+    volumes:
+      - /var/opt/ai-memory/data:/data
+    env_file:
+      - .env.production
+    environment:
+      - RUST_LOG=ai_memory=info,ai_memory_store=info,ai_memory_wiki=info,ai_memory_mcp=info,tracing_appender=warn
+      # Multilingual embeddings (embeddinggemma) served by the ollama sidecar below.
+      - AI_MEMORY_EMBEDDING_PROVIDER=openai-compat
+      - AI_MEMORY_EMBEDDING_BASE_URL=http://ollama:11434/v1
+      - AI_MEMORY_EMBEDDING_MODEL=embeddinggemma
+      - AI_MEMORY_EMBEDDING_DIM=768
+      # EmbeddingGemma task prompts (query / document), as recommended by Google.
+      - &quot;AI_MEMORY_EMBEDDING_QUERY_PREFIX=task: search result | query: &quot;
+      - &quot;AI_MEMORY_EMBEDDING_DOCUMENT_PREFIX=title: none | text: &quot;
+    depends_on:
+      - ollama
+    healthcheck:
+      test: [&quot;CMD&quot;, &quot;/usr/local/bin/ai-memory&quot;, &quot;status&quot;]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+  ollama:
+    # Embeddings only; no published port, reachable just from the compose network.
+    # CPU-only build of ollama/ollama (see ollama-cpu/Dockerfile).
+    image: local/ollama-cpu:0.40.10
+    pull_policy: never
+    build:
+      context: ./ollama-cpu
+      args:
+        OLLAMA_VERSION: &quot;0.40.10&quot;
+    container_name: ai-memory-ollama
+    restart: unless-stopped
+    volumes:
+      - /var/opt/ai-memory/ollama:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    mem_limit: 2g
+</code></pre></details>
+<p>O <code>.env.production</code>, com permissão 600 e os segredos trocados por marcadores:</p>
+<pre><code>AI_MEMORY_AUTH_TOKEN=&lt;64 caracteres hex, gerado com ai-memory generate-auth-token&gt;
+AI_MEMORY_ALLOWED_HOSTS=ai-memory.&lt;tailnet&gt;.ts.net,localhost,127.0.0.1,::1
+AI_MEMORY_AUTH__SECURE_COOKIE=true
+AI_MEMORY_LLM_PROVIDER=openai-oauth
+AI_MEMORY_LLM_MODEL=gpt-5.6-luna
+AI_MEMORY_CONSOLIDATE_ON_SESSION_END=true
+AI_MEMORY_MAINTENANCE__EMBEDDING_BACKFILL_INTERVAL_SECS=3600
+</code></pre>
+<p>O Dockerfile do Ollama só para CPU, em <code>/opt/ai-memory/ollama-cpu</code>. Uma versão nova sai de <code>docker compose build ollama</code>, seguido de <code>docker builder prune -af</code>:</p>
+<pre><code class="language-dockerfile"># CPU-only Ollama: the upstream image ships ~4 GB of CUDA/Vulkan libraries
+# this VPS has no GPU for. Same binary and CPU backends, on a plain base.
+ARG OLLAMA_VERSION=0.40.10
+
+FROM ollama/ollama:${OLLAMA_VERSION} AS full
+RUN rm -rf /usr/lib/ollama/cuda_* /usr/lib/ollama/mlx_* /usr/lib/ollama/vulkan /usr/lib/ollama/include
+
+FROM ubuntu:24.04
+RUN apt-get update &amp;&amp; apt-get install -y --no-install-recommends ca-certificates \
+    &amp;&amp; rm -rf /var/lib/apt/lists/*
+COPY --from=full /usr/bin/ollama /usr/bin/ollama
+COPY --from=full /usr/lib/ollama /usr/lib/ollama
+ENV OLLAMA_HOST=0.0.0.0:11434
+EXPOSE 11434
+ENTRYPOINT [&quot;/usr/bin/ollama&quot;]
+CMD [&quot;serve&quot;]
+</code></pre>
+<div class="tbl" id="tabela-a5"><div class="tcap"><b>Tabela A5.</b> Alternativas para o LLM de consolidação</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Opção</th>
+<th>Custo</th>
+<th>Observação</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>openai-oauth</code> + ChatGPT Plus (em uso)</td>
+<td>zero além da assinatura</td>
+<td>uso não oficial do backend; divide a cota com o uso pessoal</td>
+</tr>
+<tr>
+<td>OpenRouter + <code>anthropic/claude-haiku-4.5</code></td>
+<td>US$ 0,01 a 0,05 por sessão, segundo o projeto</td>
+<td>recomendado pelo comparativo do projeto; plano B</td>
+</tr>
+<tr>
+<td><code>anthropic-oauth</code> (assinatura Claude)</td>
+<td>não se aplica</td>
+<td>a Anthropic recusa o uso por apps de terceiros</td>
+</tr>
+<tr>
+<td>Ollama local</td>
+<td>zero</td>
+<td>o modelo testado pelo projeto (qwen3:32b) precisa de cerca de 20 GB de RAM</td>
+</tr>
+</tbody>
+</table></div></div>
+<h2 id="apendice-b-dados-brutos">Apêndice B. Dados brutos</h2>
+<p>As saídas abaixo são as dos testes, como foram impressas no terminal. Os scripts que as geraram e as perguntas do teste de qualidade estão no Apêndice C.</p>
+<p>Comparação de modelos (<code>model_bench.out</code>):</p>
+<pre><code>== bge-m3
+  short: p50=0.174s
+  medium: p50=3.573s
+  long: p50=22.839s
+  quality: hit@1=14/16 hit@3=16 mrr=0.938 index=85.9s rss=1250MiB
+== qwen3-0.6b
+  short: p50=0.213s
+  medium: p50=4.482s
+  long: p50=28.637s
+  quality: hit@1=12/16 hit@3=15 mrr=0.83 index=114.6s rss=1122MiB
+== qwen3-0.6b+prefixo
+  quality: hit@1=10/16 hit@3=14 mrr=0.77 index=114.9s rss=1121MiB
+== embeddinggemma
+  short: p50=0.068s
+  medium: p50=1.219s
+  long: p50=6.805s
+  quality: hit@1=12/16 hit@3=14 mrr=0.831 index=32.3s rss=681MiB
+== embeddinggemma+prefixo
+  quality: hit@1=14/16 hit@3=15 mrr=0.905 index=33.7s rss=681MiB
+== fila: embedding curto enquanto um longo roda
+  bge-m3: idle=0.206s during_long=23.485s
+  qwen3-embedding:0.6b: idle=0.284s during_long=28.573s
+  embeddinggemma: idle=0.107s during_long=5.705s
+</code></pre>
+<p>Operações do ai-memory com o <code>bge-m3</code> (<code>model_bench.out</code>):</p>
+<pre><code>== operações do ai-memory: ociosa x Ollama saturado (bge-m3)
+  ociosa: {'memory_query': {'p50_ms': 159.2, 'max_ms': 167.8, 'ok': '6/6'}, 'memory_recent': {'p50_ms': 2.3, 'max_ms': 3.0, 'ok': '6/6'}, 'memory_read_page': {'p50_ms': 2.7, 'max_ms': 4.9, 'ok': '6/6'}}
+  saturada: {'memory_query': {'p50_ms': 23852.4, 'max_ms': 24218.1, 'ok': '6/6'}, 'memory_recent': {'p50_ms': 3.4, 'max_ms': 7.4, 'ok': '6/6'}, 'memory_read_page': {'p50_ms': 2.8, 'max_ms': 7.1, 'ok': '6/6'}}
+</code></pre>
+<p>Operações do ai-memory com o <code>embeddinggemma</code> em produção (<code>embeddinggemma_ops.out</code>):</p>
+<pre><code>ociosa: {'memory_query': {'p50_ms': 103.6, 'max_ms': 115.9, 'ok': '6/6'}, 'memory_recent': {'p50_ms': 3.0, 'max_ms': 4.3, 'ok': '6/6'}, 'memory_read_page': {'p50_ms': 2.9, 'max_ms': 3.4, 'ok': '6/6'}}
+saturada: {'memory_query': {'p50_ms': 6502.6, 'max_ms': 6804.2, 'ok': '6/6'}, 'memory_recent': {'p50_ms': 4.6, 'max_ms': 7.8, 'ok': '6/6'}, 'memory_read_page': {'p50_ms': 4.8, 'max_ms': 8.5, 'ok': '6/6'}}
+cpu durante saturacao: media=100.0% embeddings_longos=7
+</code></pre>
+<p>Slot único do Ollama para embeddings, com <code>OLLAMA_NUM_PARALLEL=2</code> ativo (<code>parallel.out</code> e log do runner):</p>
+<pre><code>== bge-m3
+  {'short_idle_s': 0.188, 'long_alone_s': 22.817, 'short_during_long_s': 21.346, 'two_longs_wall_s': 43.49, ...}
+== embeddinggemma
+  {'short_idle_s': 0.077, 'long_alone_s': 6.481, 'short_during_long_s': 5.445, 'two_longs_wall_s': 13.32, ...}
+
+srv    load_model: initializing, n_slots = 1, n_ctx_slot = 4096, kv_unified = 'false'
+srv    load_model: initializing, n_slots = 1, n_ctx_slot = 2048, kv_unified = 'false'
+</code></pre>
+<p>Servidor, disco e backup (<code>perf_e_tailnet.out</code> e <code>bench.out</code>):</p>
+<pre><code>threads=1 events_per_s=310.20 lat_p95_ms=3.55
+40882.45 MiB transferred (4087.35 MiB/sec)
+102400.00 MiB transferred (13248.48 MiB/sec)
+under_load: usr=99.03% sys=0.90% steal=0.02% idle=0.00%
+fsync4k: iops=1598 write_lat_mean_us=14.1 fsync_lat_mean_us=607.5 fsync_p99_us=913.4
+seqread_1M: 561 MiB/s
+randread_4k_qd32: iops=27607
+backup_total_s: 39.0
+</code></pre>
+<p>Na linha do <code>parallel.out</code>, as reticências marcam campos omitidos aqui (RAM e tempos repetidos).</p>
+<h2 id="apendice-c-scripts-e-perguntas-do-benchmark">Apêndice C. Scripts e perguntas do benchmark</h2>
+<p>Os scripts abaixo geraram os números deste artigo. Deixei de fora as sessões capturadas, o conteúdo da wiki, os nomes das páginas, o nome do projeto e qualquer token. No <code>model_bench.py</code>, o token, o projeto, a página lida no teste de operações e as perguntas passaram a vir de variáveis de ambiente e de um arquivo JSON. A medição continua a mesma. Os números de 104 ms e 6,5 s com o <code>embeddinggemma</code> saem de uma cópia dessa parte do script rodada com o embeddinggemma em produção, o mesmo que rodar com <code>OPS_MODEL=embeddinggemma</code>.</p>
+<p>O corpus do teste de qualidade tem 25 trechos: cada página da wiki é um trecho, e o README e o resumo da sessão de instalação foram cortados nos títulos <code>##</code> e <code>###</code>. Quem for repetir o teste precisa montar o próprio corpus e o próprio <code>questions.json</code>, porque as páginas usadas aqui são privadas.</p>
+<div class="tbl" id="tabela-c1"><div class="tcap"><b>Tabela C1.</b> As 16 perguntas e o trecho esperado para cada uma</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>Pergunta</th>
+<th>Trecho esperado</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>por que o texto técnico não deve contar o que mudou ao longo do trabalho?</td>
+<td>regra de escrita de documentação</td>
+</tr>
+<tr>
+<td>2</td>
+<td>em que horário a cópia de segurança roda e por quanto tempo os arquivos ficam guardados?</td>
+<td>decisão sobre o backup; resumo da sessão, seção do backup</td>
+</tr>
+<tr>
+<td>3</td>
+<td>o doctor mostra eventos parados esperando o servidor, isso é problema?</td>
+<td>armadilha do spool dos hooks; resumo da sessão</td>
+</tr>
+<tr>
+<td>4</td>
+<td>por que gerar o vetor de um texto grande demora tanto na CPU?</td>
+<td>armadilha da latência do Ollama em CPU; resumo da sessão</td>
+</tr>
+<tr>
+<td>5</td>
+<td>o comando de embed falhou dizendo que o projeto não existe</td>
+<td>armadilha do comando de embedding</td>
+</tr>
+<tr>
+<td>6</td>
+<td>meu script de medição devolveu zeros, o que conferir antes de confiar nos números?</td>
+<td>armadilha de validação de benchmark</td>
+</tr>
+<tr>
+<td>7</td>
+<td>como instalo a memória num notebook com Windows?</td>
+<td>README, seção do Windows</td>
+</tr>
+<tr>
+<td>8</td>
+<td>como passo a senha de acesso do servidor para outra máquina com segurança?</td>
+<td>README, seção do token</td>
+</tr>
+<tr>
+<td>9</td>
+<td>perdi a VPS, como recupero os dados?</td>
+<td>README, seção de restauração</td>
+</tr>
+<tr>
+<td>10</td>
+<td>qual modelo resume as sessões e qual faz a busca por significado?</td>
+<td>página da arquitetura; resumo da sessão, seção do LLM</td>
+</tr>
+<tr>
+<td>11</td>
+<td>como subo o servidor para uma versão mais nova sem perder nada?</td>
+<td>README, seção de atualização</td>
+</tr>
+<tr>
+<td>12</td>
+<td>quero usar também o Codex ou o Cursor no mesmo computador</td>
+<td>README, seção de outros agentes</td>
+</tr>
+<tr>
+<td>13</td>
+<td>como saber se as conversas estão sendo gravadas?</td>
+<td>README, seção da captura; armadilha do spool; resumo da sessão</td>
+</tr>
+<tr>
+<td>14</td>
+<td>o que ficou faltando terminar?</td>
+<td>resumo da sessão, seção de pendências</td>
+</tr>
+<tr>
+<td>15</td>
+<td>where does the Google Drive copy get its credentials from?</td>
+<td>decisão sobre o backup; resumo da sessão</td>
+</tr>
+<tr>
+<td>16</td>
+<td>how do I log into the server to administer it?</td>
+<td>página da arquitetura; resumo da sessão, seções de acesso</td>
+</tr>
+</tbody>
+</table></div></div>
+<p>Uma pergunta conta como acerto em 1º lugar quando qualquer um dos trechos esperados aparece no topo da lista. O MRR é a média de 1 dividido pela posição do primeiro trecho esperado.</p>
+<div class="tbl" id="tabela-c2"><div class="tcap"><b>Tabela C2.</b> Scripts e o que cada um mede</div><div class="tscroll"><table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Onde roda</th>
+<th>O que mede</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>model_bench.py</code></td>
+<td>VPS</td>
+<td>velocidade, memória e acerto de cada embedder; fila do Ollama; operações do ai-memory com o Ollama livre e ocupado</td>
+</tr>
+<tr>
+<td><code>vps_bench.sh</code></td>
+<td>VPS</td>
+<td>MCP no loopback, embeddings por tamanho, cold start, <code>llm-test</code>, fio e backup</td>
+</tr>
+<tr>
+<td><code>server_perf.sh</code></td>
+<td>VPS</td>
+<td>sysbench de CPU e memória, steal, memória por processo, download da internet</td>
+</tr>
+<tr>
+<td><code>sampler.sh</code></td>
+<td>VPS</td>
+<td>CPU e memória do host e dos containers a cada 2 s, enquanto os outros scripts rodam</td>
+</tr>
+</tbody>
+</table></div></div>
+<p>Duas variações não aparecem aqui porque repetem os scripts acima: uma roda o <code>vps_bench.sh</code> de novo com o coletor ligado, e outra repete o teste de fila do <code>model_bench.py</code> com <code>OLLAMA_NUM_PARALLEL=2</code>. A latência pela tailnet foi medida na estação cliente com <code>curl -w</code>, 30 chamadas por caminho, com conexão nova e com conexão reaproveitada.</p>
+<p>O <code>model_bench.py</code> usa só a biblioteca padrão do Python e fala direto com o Ollama e com o endpoint MCP no loopback:</p>
+<details class="code"><summary>Ver o código completo (175 linhas)</summary><pre><code class="language-python">#!/usr/bin/env python3
+&quot;&quot;&quot;Compare embedding models on the ai-memory VPS: speed, RAM, retrieval quality on the
+real wiki, and how a saturated Ollama affects other ai-memory operations.
+
+Usage: AI_MEMORY_TOKEN_FILE=~/.bench_token AI_MEMORY_PROJECT=&lt;project&gt; OPS_PAGE=&lt;page.md&gt; \
+       python3 model_bench.py http://&lt;ollama ip&gt;:11434 &lt;wiki dir&gt; questions.json&quot;&quot;&quot;
+import json, os, re, statistics, subprocess, sys, threading, time, urllib.request
+
+OLLAMA = sys.argv[1]            # http://&lt;ollama container ip&gt;:11434
+CORPUS = sys.argv[2]            # dir with the wiki pages + README.md
+QUESTIONS = sys.argv[3]         # [{&quot;q&quot;: &quot;...&quot;, &quot;expected&quot;: [&quot;page.md&quot;, &quot;README.md#Section&quot;]}]
+TOKEN = open(os.path.expanduser(os.environ['AI_MEMORY_TOKEN_FILE'])).read().strip()  # mode 600
+OPS_MODEL = os.environ.get('OPS_MODEL', 'bge-m3')  # embedder in production during the ops test
+MCP = 'http://127.0.0.1:49374/mcp'
+
+MODELS = [
+    # (label, model, query prefix, document prefix)
+    ('bge-m3', 'bge-m3', '', ''),
+    ('qwen3-0.6b', 'qwen3-embedding:0.6b', '', ''),
+    ('qwen3-0.6b+prefixo', 'qwen3-embedding:0.6b',
+     'Instruct: Given a question, retrieve the passage that answers it\nQuery: ', ''),
+    ('embeddinggemma', 'embeddinggemma', '', ''),
+    ('embeddinggemma+prefixo', 'embeddinggemma', 'task: search result | query: ', 'title: none | text: '),
+]
+
+def post(url, body, headers=None, timeout=600):
+    req = urllib.request.Request(url, json.dumps(body).encode(), {'Content-Type': 'application/json', **(headers or {})})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read(), r.headers
+
+def embed(model, texts, keep_alive='10m'):
+    raw, _ = post(f'{OLLAMA}/api/embed', {'model': model, 'input': texts, 'keep_alive': keep_alive})
+    return json.loads(raw)['embeddings']
+
+def unload_all():
+    for m in ['bge-m3', 'qwen3-embedding:0.6b', 'embeddinggemma']:
+        try: post(f'{OLLAMA}/api/embed', {'model': m, 'keep_alive': 0}, timeout=30)
+        except Exception: pass
+    time.sleep(2)
+
+def runner_rss_mib():
+    out = subprocess.run(['ps', '-eo', 'rss,args'], capture_output=True, text=True).stdout
+    return sum(int(l.split()[0]) for l in out.splitlines()[1:] if 'llama-server' in l or 'ollama runner' in l) / 1024
+
+def pct(v, p): s = sorted(v); return s[min(len(s) - 1, int(round(p / 100 * (len(s) - 1))))]
+
+# ---------- corpus ----------
+def strip_front(t): return re.sub(r'\A---\n.*?\n---\n', '', t, flags=re.S)
+docs = {}
+for root, _, files in os.walk(CORPUS):
+    for f in files:
+        p = os.path.join(root, f); rel = os.path.relpath(p, CORPUS)
+        text = strip_front(open(p).read())
+        if rel == 'README.md' or rel.startswith('sessions/'):
+            parts = re.split(r'\n(?=#{2,3} )', text)
+            for part in parts:
+                m = re.match(r'#{2,3} (.+)', part)
+                if m: docs[f'{rel}#{m.group(1).strip()}'] = part
+        else:
+            docs[rel] = text
+ids = sorted(docs)
+
+QUERIES = [(x['q'], x['expected']) for x in json.load(open(QUESTIONS))]
+
+def cos(a, b):
+    na = sum(x * x for x in a) ** .5; nb = sum(x * x for x in b) ** .5
+    return sum(x * y for x, y in zip(a, b)) / (na * nb)
+
+SHORT = 'Decidimos usar Tailscale para acessar o servidor'
+MEDIUM = ' '.join(['O servidor ai-memory roda em Docker numa VPS da OVH e guarda a memoria dos agentes de codigo.'] * 12)
+LONG = ' '.join(['O servidor ai-memory roda em Docker numa VPS da OVH e guarda a memoria dos agentes de codigo.'] * 60)
+
+results = {'corpus_docs': len(ids), 'queries': len(QUERIES), 'models': {}}
+done_speed = set()
+for label, model, qp, dp in MODELS:
+    print(f'== {label}', flush=True)
+    r = results['models'][label] = {}
+    unload_all()
+    t = time.time(); embed(model, ['teste']); r['cold_s'] = round(time.time() - t, 2)
+    r['rss_mib'] = round(runner_rss_mib())
+    r['dim'] = len(embed(model, ['x'])[0])
+    if model not in done_speed:
+        done_speed.add(model)
+        for name, text, n in [('short', SHORT, 10), ('medium', MEDIUM, 10), ('long', LONG, 5)]:
+            ts = []
+            for _ in range(n):
+                t = time.time(); embed(model, [text]); ts.append(time.time() - t)
+            r[f'{name}_p50_s'] = round(statistics.median(ts), 3)
+            print(f'  {name}: p50={r[name + &quot;_p50_s&quot;]}s', flush=True)
+    # quality
+    t = time.time()
+    dvec = {}
+    for i in ids: dvec[i] = embed(model, [dp + docs[i]])[0]
+    r['index_corpus_s'] = round(time.time() - t, 1)
+    hit1 = hit3 = 0; rr = []; misses = []
+    for q, rel in QUERIES:
+        qv = embed(model, [qp + q])[0]
+        rank = sorted(ids, key=lambda i: -cos(qv, dvec[i]))
+        pos = min(rank.index(x) for x in rel) + 1
+        hit1 += pos == 1; hit3 += pos &lt;= 3; rr.append(1 / pos)
+        if pos &gt; 1: misses.append(f'{q[:50]}… -&gt; pos {pos} (top: {rank[0]})')
+    r.update(hit1=hit1, hit3=hit3, mrr=round(sum(rr) / len(rr), 3), misses=misses)
+    print(f'  quality: hit@1={hit1}/{len(QUERIES)} hit@3={hit3} mrr={r[&quot;mrr&quot;]} index={r[&quot;index_corpus_s&quot;]}s rss={r[&quot;rss_mib&quot;]}MiB', flush=True)
+
+# ---------- contention: queue wait of a short query embedding while a long one runs ----------
+print('== fila: embedding curto enquanto um longo roda', flush=True)
+results['queue'] = {}
+for model in ['bge-m3', 'qwen3-embedding:0.6b', 'embeddinggemma']:
+    unload_all(); embed(model, ['aquecer'])
+    t = time.time(); embed(model, [SHORT]); idle = time.time() - t
+    th = threading.Thread(target=lambda: embed(model, [LONG])); th.start(); time.sleep(1)
+    t = time.time(); embed(model, [SHORT]); busy = time.time() - t
+    th.join()
+    results['queue'][model] = {'short_idle_s': round(idle, 3), 'short_during_long_s': round(busy, 3)}
+    print(f'  {model}: idle={idle:.3f}s during_long={busy:.3f}s', flush=True)
+
+# ---------- ai-memory operations idle vs. while Ollama is saturated (OPS_MODEL) ----------
+def mcp_session():
+    h = {'Authorization': f'Bearer {TOKEN}', 'Accept': 'application/json, text/event-stream'}
+    _, hd = post(MCP, {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}, 'clientInfo': {'name': 'bench', 'version': '0'}}}, h)
+    sid = hd.get('Mcp-Session-Id')
+    if sid: h['Mcp-Session-Id'] = sid
+    try: post(MCP, {'jsonrpc': '2.0', 'method': 'notifications/initialized'}, h)
+    except Exception: pass
+    return h
+
+def mcp_ok(body):
+    # the reply is plain JSON or SSE; check the JSON-RPC response itself, not its formatting
+    if body.lstrip().startswith('{'):
+        msgs = [json.loads(body)]
+    else:
+        msgs = [json.loads(l[5:]) for l in body.splitlines() if l.startswith('data:')]
+    m = next((x for x in msgs if x.get('id') == 2), None)
+    return bool(m) and 'error' not in m and 'result' in m and not m['result'].get('isError', False)
+
+def call(h, name, args):
+    t = time.time()
+    raw, _ = post(MCP, {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': name, 'arguments': args}}, h, timeout=120)
+    dt = time.time() - t
+    body = raw.decode()
+    ok = mcp_ok(body)
+    return dt, ok
+
+SCOPE = {'workspace': os.environ.get('AI_MEMORY_WORKSPACE', 'default'), 'project': os.environ['AI_MEMORY_PROJECT']}
+OPS = [
+    ('memory_query', {'query': 'como funciona o backup para o Google Drive?', **SCOPE}),
+    ('memory_recent', {'limit': 5, **SCOPE}),
+    ('memory_read_page', {'path': os.environ['OPS_PAGE'], **SCOPE}),
+]
+def run_ops(h, n=6):
+    out = {}
+    for name, args in OPS:
+        ts, oks = [], 0
+        for _ in range(n):
+            dt, ok = call(h, name, args); ts.append(dt); oks += ok
+        out[name] = {'p50_ms': round(statistics.median(ts) * 1000, 1), 'max_ms': round(max(ts) * 1000, 1), 'ok': f'{oks}/{n}'}
+    return out
+
+print(f'== operações do ai-memory: ociosa x Ollama saturado ({OPS_MODEL})', flush=True)
+unload_all(); embed(OPS_MODEL, ['aquecer'], keep_alive='24h')
+h = mcp_session()
+results['ops_idle'] = run_ops(h)
+print('  ociosa:', results['ops_idle'], flush=True)
+stop = threading.Event()
+def saturate():
+    while not stop.is_set(): embed(OPS_MODEL, [LONG], keep_alive='24h')
+th = threading.Thread(target=saturate); th.start(); time.sleep(2)
+results['ops_busy'] = run_ops(h)
+stop.set(); th.join()
+print('  saturada:', results['ops_busy'], flush=True)
+
+# leave production state as it was: only OPS_MODEL loaded
+unload_all(); embed(OPS_MODEL, ['aquecer'], keep_alive='24h')
+json.dump(results, open('model_bench.json', 'w'), ensure_ascii=False, indent=1)
+print('== fim', flush=True)
+</code></pre></details>
+<p>O <code>vps_bench.sh</code> lê o token do <code>.env.production</code> e não grava o token em nenhuma saída. Ele não altera páginas, mas reinicia o container do Ollama, instala e remove o <code>fio</code>, grava arquivos de teste em disco e dispara um backup real. Rode fora do horário de uso. O <code>llm-test</code> do script, com <code>--model gpt-5.5</code> no lugar de <code>--model gpt-5.6-luna</code>, é o teste que devolveu o <code>400 model_not_found</code>:</p>
+<details class="code"><summary>Ver o código completo (90 linhas)</summary><pre><code class="language-bash">#!/usr/bin/env bash
+# Server-side benchmarks for the ai-memory VPS. Does not change wiki pages, but it restarts
+# the Ollama container, installs and purges fio, writes fio test files and runs a real backup.
+set -u
+export LC_ALL=C
+TOKEN=$(grep ^AI_MEMORY_AUTH_TOKEN= /opt/ai-memory/.env.production | cut -d= -f2-)
+BODY='{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:1,&quot;method&quot;:&quot;initialize&quot;,&quot;params&quot;:{&quot;protocolVersion&quot;:&quot;2025-06-18&quot;,&quot;capabilities&quot;:{},&quot;clientInfo&quot;:{&quot;name&quot;:&quot;bench&quot;,&quot;version&quot;:&quot;0&quot;}}}'
+
+stats() { sort -n | awk '{a[NR]=$1; s+=$1} END{printf &quot;n=%d min=%.4f p50=%.4f p95=%.4f max=%.4f mean=%.4f\n&quot;, NR, a[1], a[int((NR+1)/2)], a[int(NR*0.95+0.5)], a[NR], s/NR}'; }
+
+echo &quot;== mcp initialize via loopback (no network), 30x&quot;
+for i in $(seq 30); do curl -s -o /dev/null -w &quot;%{time_total}\n&quot; -X POST http://127.0.0.1:49374/mcp \
+  -H &quot;Authorization: Bearer $TOKEN&quot; -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' -d &quot;$BODY&quot;; done | stats
+
+echo &quot;== embeddings bge-m3 (warm), 20x each size&quot;
+sudo docker pull -q curlimages/curl:8.11.1 &gt;/dev/null
+short=&quot;Decidimos usar Tailscale para acessar o servidor&quot;
+medium=$(printf 'O servidor ai-memory roda em Docker numa VPS da OVH e guarda a memoria dos agentes de codigo. %.0s' $(seq 12))
+long=$(printf 'O servidor ai-memory roda em Docker numa VPS da OVH e guarda a memoria dos agentes de codigo. %.0s' $(seq 60))
+for name in short medium long; do
+  text=${!name}
+  words=$(echo &quot;$text&quot; | wc -w)
+  printf '{&quot;model&quot;:&quot;bge-m3&quot;,&quot;input&quot;:&quot;%s&quot;}' &quot;$text&quot; &gt; /tmp/emb_$name.json
+  sudo docker run --rm --network ai-memory_default -v /tmp/emb_$name.json:/b.json:ro curlimages/curl:8.11.1 \
+    -s -o /dev/null http://ollama:11434/v1/embeddings -H 'Content-Type: application/json' -d @/b.json
+  printf &quot;%s (%s words): &quot; &quot;$name&quot; &quot;$words&quot;
+  sudo docker run --rm --network ai-memory_default -v /tmp/emb_$name.json:/b.json:ro --entrypoint sh curlimages/curl:8.11.1 -c \
+    'for i in $(seq 20); do curl -s -o /dev/null -w &quot;%{time_total}\n&quot; http://ollama:11434/v1/embeddings -H &quot;Content-Type: application/json&quot; -d @/b.json; done' | stats
+done
+rm -f /tmp/emb_*.json
+
+echo &quot;== embeddings cold start (model unload + first call)&quot;
+sudo docker restart ai-memory-ollama &gt;/dev/null; sleep 4
+printf '{&quot;model&quot;:&quot;bge-m3&quot;,&quot;input&quot;:&quot;teste&quot;}' &gt; /tmp/emb_cold.json
+sudo docker run --rm --network ai-memory_default -v /tmp/emb_cold.json:/b.json:ro curlimages/curl:8.11.1 \
+  -s -o /dev/null -w &quot;cold=%{time_total}\n&quot; http://ollama:11434/v1/embeddings -H 'Content-Type: application/json' -d @/b.json
+rm -f /tmp/emb_cold.json
+sudo docker rmi -f curlimages/curl:8.11.1 &gt;/dev/null
+
+echo &quot;== llm-test openai-oauth gpt-5.6-luna, 5x&quot;
+for i in $(seq 5); do
+  s=$(date +%s.%N)
+  sudo docker exec ai-memory /usr/local/bin/ai-memory llm-test --provider openai-oauth --model gpt-5.6-luna --prompt &quot;Reply with OK&quot; &gt;/dev/null 2&gt;&amp;1 &amp;&amp; ok=ok || ok=fail
+  e=$(date +%s.%N); echo &quot;$(echo &quot;$e - $s&quot; | bc) $ok&quot;
+done | tee /tmp/llm.txt | awk '{print $1}' | stats; grep -c fail /tmp/llm.txt; rm -f /tmp/llm.txt
+
+echo &quot;== disk: fio 4k random write with fsync per write (SQLite-like), 30s&quot;
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fio &gt;/dev/null
+cd /var/opt/ai-memory &amp;&amp; sudo fio --name=fsync4k --filename=/var/opt/ai-memory/fio.test --size=256M --bs=4k --rw=randwrite \
+  --ioengine=sync --fsync=1 --runtime=30 --time_based --output-format=json &gt; /tmp/fio1.json 2&gt;/dev/null
+python3 - &lt;&lt;'PY'
+import json
+j = json.load(open('/tmp/fio1.json'))['jobs'][0]
+w = j['write']; s = j['sync']
+print(f&quot;fsync4k: iops={w['iops']:.0f} write_lat_mean_us={w['clat_ns']['mean']/1000:.1f} fsync_lat_mean_us={s['lat_ns']['mean']/1000:.1f} fsync_p99_us={s['lat_ns']['percentile']['99.000000']/1000:.1f}&quot;)
+PY
+sudo fio --name=seqread --filename=/var/opt/ai-memory/fio.test --size=256M --bs=1M --rw=read --ioengine=libaio --direct=1 \
+  --runtime=10 --time_based --output-format=json &gt; /tmp/fio2.json 2&gt;/dev/null
+sudo fio --name=randread --filename=/var/opt/ai-memory/fio.test --size=256M --bs=4k --rw=randread --ioengine=libaio --direct=1 \
+  --iodepth=32 --runtime=10 --time_based --output-format=json &gt; /tmp/fio3.json 2&gt;/dev/null
+python3 - &lt;&lt;'PY'
+import json
+r = json.load(open('/tmp/fio2.json'))['jobs'][0]['read']
+print(f&quot;seqread_1M: {r['bw']/1024:.0f} MiB/s&quot;)
+r = json.load(open('/tmp/fio3.json'))['jobs'][0]['read']
+print(f&quot;randread_4k_qd32: iops={r['iops']:.0f}&quot;)
+PY
+sudo rm -f /var/opt/ai-memory/fio.test /tmp/fio*.json
+sudo apt-get purge -y -qq fio &gt;/dev/null; sudo apt-get autoremove -y -qq &gt;/dev/null
+
+echo &quot;== backup run timings&quot;
+sudo systemctl start ai-memory-backup.service
+log=$(ls -t /var/log/ai-memory-snapshot/*.log | head -1)
+grep -E &quot;^===|^---&quot; &quot;$log&quot; | head -20
+python3 - &quot;$log&quot; &lt;&lt;'PY'
+import sys, re, datetime
+lines = open(sys.argv[1]).read().splitlines()
+ts = [l for l in lines if l.startswith('===')]
+def t(l): return datetime.datetime.fromisoformat(re.search(r'(\d{4}-\d\d-\d\dT[\d:]+\+\d\d:\d\d)', l).group(1))
+print(&quot;backup_total_s:&quot;, (t(ts[-1]) - t(ts[0])).total_seconds())
+PY
+ls -l /var/opt/ai-memory/tarballs/ | tail -2
+
+echo &quot;== memory and disk&quot;
+sudo docker stats --no-stream --format &quot;{{.Name}} {{.MemUsage}} {{.CPUPerc}}&quot;
+free -m | sed -n 1,3p
+df -h / | tail -1
+sudo docker image ls --format &quot;{{.Repository}}:{{.Tag}} {{.Size}}&quot;
+uptime
+</code></pre></details>
+<p>O <code>server_perf.sh</code> instala sysbench e sysstat durante o teste e remove os dois no fim:</p>
+<details class="code"><summary>Ver o código completo (48 linhas)</summary><pre><code class="language-bash">#!/usr/bin/env bash
+# Host performance profile for the ai-memory VPS. Installs sysbench/sysstat
+# temporarily and removes them at the end.
+set -u
+export LC_ALL=C
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sysbench sysstat &gt;/dev/null
+
+echo &quot;== cpu info&quot;
+lscpu | grep -E &quot;Model name|^CPU\(s\)|Thread|MHz|L2|L3|Hypervisor|Flags&quot; | sed 's/Flags:.*avx2.*/Flags: avx2 present/' | cut -c1-120
+
+echo &quot;== sysbench cpu (primes to 20000), 20s each&quot;
+for t in 1 2; do
+  printf &quot;threads=%s &quot; &quot;$t&quot;
+  sysbench cpu --cpu-max-prime=20000 --threads=$t --time=20 run | awk '/events per second/{printf &quot;events_per_s=%s &quot;, $4} /95th percentile/{printf &quot;lat_p95_ms=%s&quot;, $3} END{print &quot;&quot;}'
+done
+
+echo &quot;== sysbench memory (1K blocks, sequential write), 10s&quot;
+sysbench memory --memory-block-size=1K --memory-total-size=100G --threads=1 --time=10 run | grep -E &quot;transferred&quot; | sed 's/^ *//'
+sysbench memory --memory-block-size=1M --memory-total-size=100G --threads=2 --time=10 run | grep -E &quot;transferred&quot; | sed 's/^ *//'
+
+echo &quot;== cpu steal / idle under the cpu test (mpstat 1s x 20 while sysbench runs 2 threads)&quot;
+( sysbench cpu --cpu-max-prime=20000 --threads=2 --time=22 run &gt;/dev/null &amp; )
+sleep 1
+mpstat 1 20 | awk '/Average/ {print &quot;under_load: usr=&quot; $3 &quot;% sys=&quot; $5 &quot;% steal=&quot; $9 &quot;% idle=&quot; $NF &quot;%&quot;}'
+
+echo &quot;== cpu steal / idle at rest (mpstat 1s x 60)&quot;
+sleep 3
+mpstat 1 60 | awk '/Average/ {print &quot;at_rest: usr=&quot; $3 &quot;% sys=&quot; $5 &quot;% iowait=&quot; $6 &quot;% steal=&quot; $9 &quot;% idle=&quot; $NF &quot;%&quot;}'
+
+echo &quot;== load and uptime&quot;
+cat /proc/loadavg
+uptime -p
+
+echo &quot;== container usage at rest (5 samples)&quot;
+for i in 1 2 3 4 5; do sudo docker stats --no-stream --format &quot;{{.Name}} cpu={{.CPUPerc}} mem={{.MemUsage}}&quot;; sleep 2; done | sort | awk '{print}' | uniq -c | sort -rn | head -10
+
+echo &quot;== memory breakdown (MiB)&quot;
+free -m | sed -n 1,3p
+awk '/^(MemTotal|MemAvailable|Cached|Buffers|AnonPages|Shmem|Slab):/ {printf &quot;%s %d\n&quot;, $1, $2/1024}' /proc/meminfo
+
+echo &quot;== process RSS top&quot;
+ps -eo rss,comm --sort=-rss | head -8 | awk 'NR==1{print; next}{printf &quot;%6.0f MiB %s\n&quot;, $1/1024, $2}'
+
+echo &quot;== internet egress throughput (download 100 MB from OVH test file)&quot;
+curl -s -o /dev/null -w &quot;download_speed=%{speed_download} bytes/s total=%{time_total}s\n&quot; --max-time 60 https://proof.ovh.ca/files/100Mb.dat || echo &quot;download failed&quot;
+
+sudo apt-get purge -y -qq sysbench sysstat &gt;/dev/null; sudo apt-get autoremove -y -qq &gt;/dev/null
+echo &quot;== done&quot;
+</code></pre></details>
+<p>O <code>sampler.sh</code> roda em paralelo aos outros e para quando encontra o arquivo <code>~/perf.done</code>. Cada linha do CSV leva o nome da etapa em andamento, lido do último <code>==</code> impresso pelos outros scripts:</p>
+<pre><code class="language-bash">#!/usr/bin/env bash
+# Samples host and container resource use every ~2s while the benchmarks run.
+# Output CSV: ts,phase,cpu_busy_pct,cpu_steal_pct,mem_used_mib,swap_used_mib,aim_cpu_pct,aim_mem_mib,ollama_cpu_pct,ollama_mem_mib
+set -u
+export LC_ALL=C
+out=~/resources.csv
+echo &quot;ts,phase,cpu_busy_pct,cpu_steal_pct,mem_used_mib,swap_used_mib,aim_cpu_pct,aim_mem_mib,ollama_cpu_pct,ollama_mem_mib&quot; &gt; &quot;$out&quot;
+
+read_cpu() { awk '/^cpu /{idle=$5+$6; steal=$9; total=0; for(i=2;i&lt;=NF;i++) total+=$i; print total, idle, steal}' /proc/stat; }
+to_mib() { awk -v v=&quot;$1&quot; 'BEGIN{n=v+0; if (v ~ /GiB/) n*=1024; else if (v ~ /KiB/) n/=1024; else if (v ~ /B$/ &amp;&amp; v !~ /iB/) n/=1048576; printf &quot;%.0f&quot;, n}'; }
+
+phase() {
+  local f p=&quot;&quot;
+  for f in ~/perf.out ~/bench.out; do
+    [ -s &quot;$f&quot; ] &amp;&amp; { p=$(grep '^==' &quot;$f&quot; | tail -1 | sed 's/^== //; s/,/;/g' | cut -c1-60); [ -n &quot;$p&quot; ] &amp;&amp; break; }
+  done
+  [ -f ~/perf.out ] &amp;&amp; [ -n &quot;$p&quot; ] &amp;&amp; p=&quot;perf: $p&quot;
+  echo &quot;${p:-idle}&quot;
+}
+
+read t0 i0 s0 &lt; &lt;(read_cpu)
+until [ -f ~/perf.done ]; do
+  stats=$(sudo docker stats --no-stream --format '{{.Name}} {{.CPUPerc}} {{.MemUsage}}')
+  read t1 i1 s1 &lt; &lt;(read_cpu)
+  dt=$((t1 - t0)); [ &quot;$dt&quot; -le 0 ] &amp;&amp; dt=1
+  busy=$(awk -v dt=$dt -v di=$((i1 - i0)) -v ds=$((s1 - s0)) 'BEGIN{printf &quot;%.1f&quot;, 100*(dt-di-ds)/dt}')
+  steal=$(awk -v dt=$dt -v ds=$((s1 - s0)) 'BEGIN{printf &quot;%.1f&quot;, 100*ds/dt}')
+  t0=$t1; i0=$i1; s0=$s1
+  mem=$(free -m | awk '/^Mem:/{print $3}'); swp=$(free -m | awk '/^Swap:/{print $3}')
+  aim=$(echo &quot;$stats&quot; | awk '$1==&quot;ai-memory&quot;{print $2, $3}')
+  oll=$(echo &quot;$stats&quot; | awk '$1==&quot;ai-memory-ollama&quot;{print $2, $3}')
+  aim_cpu=$(echo &quot;$aim&quot; | awk '{gsub(&quot;%&quot;,&quot;&quot;,$1); print $1+0}'); aim_mem=$(to_mib &quot;$(echo &quot;$aim&quot; | awk '{print $2}')&quot;)
+  oll_cpu=$(echo &quot;$oll&quot; | awk '{gsub(&quot;%&quot;,&quot;&quot;,$1); print $1+0}'); oll_mem=$(to_mib &quot;$(echo &quot;$oll&quot; | awk '{print $2}')&quot;)
+  echo &quot;$(date -u +%H:%M:%S),$(phase),$busy,$steal,$mem,$swp,$aim_cpu,$aim_mem,$oll_cpu,$oll_mem&quot; &gt;&gt; &quot;$out&quot;
+done
+</code></pre>
+    </article>
+  </main>
+</div>
+
+<script>
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll('#toc a'));
+  var heads = links.map(function (a) { return document.getElementById(a.dataset.id); }).filter(Boolean);
+  var bar = document.getElementById('bar');
+  var current = null;
+  function update() {
+    var y = window.scrollY + 120, active = heads[0];
+    for (var i = 0; i < heads.length; i++) { if (heads[i].offsetTop <= y) active = heads[i]; else break; }
+    if (active && active !== current) {
+      current = active;
+      links.forEach(function (a) {
+        var on = a.dataset.id === active.id;
+        a.classList.toggle('on', on);
+        if (on) {
+          var nav = document.getElementById('toc');
+          var top = a.offsetTop - nav.offsetTop;
+          if (top < nav.scrollTop || top > nav.scrollTop + nav.clientHeight - 40) nav.scrollTop = top - nav.clientHeight / 3;
+        }
+      });
+    }
+    var max = document.documentElement.scrollHeight - window.innerHeight;
+    if (bar) bar.style.width = (max > 0 ? Math.min(100, window.scrollY / max * 100) : 0) + '%';
+  }
+  var ticking = false;
+  window.addEventListener('scroll', function () {
+    if (!ticking) { ticking = true; requestAnimationFrame(function () { ticking = false; update(); }); }
+  }, { passive: true });
+  document.querySelectorAll('.mtoc a').forEach(function (a) {
+    a.addEventListener('click', function () { a.closest('details').open = false; });
+  });
+  update();
+})();
+</script>
