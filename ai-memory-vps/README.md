@@ -173,7 +173,7 @@ Só a busca sente a fila, porque é a única operação da tabela que precisa de
 
 A CPU só satura enquanto o Ollama calcula embeddings; em repouso, o sistema usa 5,6% (Figura 8). O teste do LLM chega a 17%, quase tudo do `docker exec` que dispara o teste, porque o modelo roda nos servidores da OpenAI. Fiz a medição por etapa com o `bge-m3`. Com o `embeddinggemma`, os picos têm a mesma forma e duram cerca de um terço.
 
-Durante um embedding longo, o initialize do MCP no loopback ficou em 1,4 ms no p50 e 5,5 ms no p95, contra 1,2 ms e 1,4 ms em repouso. Limitar o Ollama a 1 vCPU só deixaria o embedding mais lento: com o `bge-m3`, um texto de 216 palavras passa de 3,3 s para 6,3 s.
+Durante um embedding longo, o initialize do MCP no loopback ficou em 1,4 ms no p50 e 5,5 ms no p95, contra 1,2 ms e 1,4 ms em repouso. Limitar o Ollama a 1 vCPU só deixaria o embedding mais lento: no teste com o `bge-m3`, feito antes da troca de modelo, um texto de 216 palavras passa de 3,3 s para 6,3 s.
 
 ### 6.4 Memória, disco e a VPS
 
@@ -198,7 +198,7 @@ O disco tem 6,1 GB em uso dos 40 GB, dos quais 1,7 GB são modelos do Ollama. As
 | --- | --- |
 | sysbench cpu, 1 thread | 310 eventos/s, p95 de 3,55 ms |
 | CPU steal com os 2 vCPUs em 100% | 0,02% |
-| `bge-m3` com 1, 1,5 e 2 vCPU (216 palavras) | 6,3 s, 4,4 s e 3,3 s |
+| `bge-m3` com 1, 1,5 e 2 vCPU (216 palavras, antes da troca para o `embeddinggemma`) | 6,3 s, 4,4 s e 3,3 s |
 | Memória, blocos de 1 KB, 1 thread | 4.087 MiB/s |
 | Memória, blocos de 1 MB, 2 threads | 13.248 MiB/s |
 | Disco, escrita 4 KB com fsync a cada escrita | 1.598 IOPS; fsync médio de 0,61 ms, p99 de 0,91 ms |
@@ -207,7 +207,7 @@ O disco tem 6,1 GB em uso dos 40 GB, dos quais 1,7 GB são modelos do Ollama. As
 | Download da internet (100 MB da OVH) | 54 MB/s (435 Mbps) |
 | Cópia por ssh na tailnet | 9,9 MB/s de download, 6,0 MB/s de upload |
 
-Com steal de 0,02% sob carga total, os vCPUs não disputaram o host com outras VMs no período medido. O tempo do `bge-m3` cai quase em proporção aos vCPUs, então o segundo núcleo rende. Com fsync médio de 0,61 ms, cada commit do SQLite custa menos de 1 ms de disco. Pela tailnet, a cópia por ssh fica em 9,9 MB/s numa única conexão TCP, com RTT de 143 ms. O teste não isolou o que limita essa taxa.
+Com steal de 0,02% sob carga total, os vCPUs não disputaram o host com outras VMs no período medido. Num teste com o `bge-m3`, feito antes da troca para o `embeddinggemma`, o tempo de um embedding cai quase em proporção aos vCPUs: 6,3 s com 1 vCPU e 3,3 s com 2. O segundo núcleo rende. Com fsync médio de 0,61 ms, cada commit do SQLite custa menos de 1 ms de disco. Pela tailnet, a cópia por ssh fica em 9,9 MB/s numa única conexão TCP, com RTT de 143 ms. O teste não isolou o que limita essa taxa.
 
 ## 7. Backup: o Drive é a única cópia completa fora da OVH
 
